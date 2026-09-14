@@ -1,0 +1,555 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  customer
+  operator
+  admin
+}
+
+enum Occasion {
+  Wedding
+  Party
+  Office
+  DateNight @map("Date Night")
+  Festival
+  Travel
+  Everyday
+}
+
+enum StyleTag {
+  Minimal
+  Classic
+  Street
+  Formal
+  Traditional
+  Contemporary
+}
+
+enum ProductView {
+  front
+  back
+  fabric
+  model
+  detail
+}
+
+// The 8 states from the Concourse frontend, plus two terminal states the
+// frontend enum has no exit for:
+//  - `retired`   — a unit that fails inspection permanently (build spec §7.7)
+//  - `sold`      — a unit fulfilling a "buy" order leaves rental circulation
+//                  for good (not covered by the original spec, but required
+//                  for correctness: without it, a bought unit would still
+//                  count as inventory).
+enum GarmentStage {
+  available
+  reserved
+  rented
+  returned
+  inspection
+  laundry
+  quality
+  ready
+  retired
+  sold
+}
+
+enum Condition {
+  excellent
+  good
+  fair
+  needs_review @map("needs review")
+}
+
+enum CartMode {
+  rent
+  buy
+}
+
+enum OrderStatus {
+  pending_payment
+  confirmed
+  packed
+  shipped
+  with_customer     @map("with customer")
+  return_in_transit @map("return in transit")
+  closed
+  cancelled
+}
+
+enum PaymentMethod {
+  card
+  wallet
+  bank_transfer
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  partially_refunded
+  refunded
+  failed
+}
+
+enum PaymentGateway {
+  stripe
+  mock
+}
+
+enum RefundStatus {
+  pending
+  processed
+  failed
+}
+
+enum LaundryStage {
+  received
+  washing
+  drying
+  pressing
+  quality
+  ready
+}
+
+enum LaundryPriority {
+  standard
+  rush
+}
+
+enum DeliveryType {
+  pickup
+  dropoff
+}
+
+enum DeliveryStatus {
+  scheduled
+  en_route
+  completed
+  delayed
+}
+
+enum NotificationSeverity {
+  info
+  warning
+  danger
+  success
+}
+
+enum RelatedType {
+  order
+  batch
+  delivery
+  unit
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String   @id @default(uuid())
+  name              String
+  email             String   @unique
+  phone             String?  @unique
+  // Nullable: Google-only accounts (created via continueWithGoogle) have no
+  // password of their own.
+  passwordHash      String?
+  googleId          String?  @unique
+  verified          Boolean  @default(false)
+  role              Role     @default(customer)
+  // Multi-currency (build spec §currency decisions): country drives the
+  // default display currency; preferredCurrency lets a signed-in user override it.
+  country           String?
+  preferredCurrency String?
+  createdAt         DateTime @default(now())
+
+  cart               Cart?
+  wishlistItems      WishlistItem[]
+  orders             Order[]             @relation("CustomerOrders")
+  payments           Payment[]
+  sessions           Session[]
+  stageTransitions   StageTransition[]   @relation("StageTransitionActor")
+  reviews            Review[]
+  notificationReads  NotificationRead[]
+}
+
+model Session {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issuedAt   DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  userAgent  String?
+  ip         String?
+
+  @@index([userId])
+}
+
+model OtpCode {
+  phone            String    @id
+  codeHash         String
+  expiresAt        DateTime
+  attempts         Int       @default(0)
+  lastSentAt       DateTime  @default(now())
+  sendCount        Int       @default(0)
+  sendWindowStart  DateTime  @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Catalog (Shop) vs Inventory (Concourse) — kept as two separate tables.
+// See build spec §2: a Product is a design, a GarmentUnit is one physical item.
+// ---------------------------------------------------------------------------
+
+model Product {
+  id              String        @id @default(uuid())
+  name            String
+  brand           String
+  category        String
+  occasions       Occasion[]
+  styles          StyleTag[]
+  color           String
+  colorHex        String
+  rentPricePaise  Int
+  rentDays        Int
+  buyPricePaise   Int
+  depositPaise    Int
+  deliveryDays    Int
+  fabric          String
+  care            String[]
+  measurements    Json
+  views           ProductView[]
+  imageUrls       Json
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  garmentUnits    GarmentUnit[]
+  reviews         Review[]
+  outfitProducts  OutfitProduct[]
+  cartItems       CartItem[]
+  wishlistItems   WishlistItem[]
+  orderItems      OrderItem[]
+
+  @@index([category])
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@index([productId])
+}
+
+model Facility {
+  id            String        @id @default(uuid())
+  name          String
+  city          String
+  garmentUnits  GarmentUnit[]
+  laundryBatches LaundryBatch[]
+}
+
+model GarmentUnit {
+  id              String        @id @default(uuid())
+  sku             String        @unique
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  size            String
+  stage           GarmentStage  @default(available)
+  condition       Condition     @default(excellent)
+  retiredAt       DateTime?
+  lastMovedAt     DateTime      @default(now())
+  timesRented     Int           @default(0)
+  currentOrderId  String?
+  currentOrder    Order?        @relation("OrderCurrentUnits", fields: [currentOrderId], references: [id])
+  facilityId      String?
+  facility        Facility?     @relation(fields: [facilityId], references: [id])
+
+  stageTransitions StageTransition[]
+  batchItems       BatchItem[]
+  orderItems       OrderItem[]
+
+  @@index([productId, size, stage])
+  @@index([stage])
+}
+
+model StageTransition {
+  id              String        @id @default(uuid())
+  garmentUnitId   String
+  garmentUnit     GarmentUnit   @relation(fields: [garmentUnitId], references: [id], onDelete: Cascade)
+  fromStage       GarmentStage?
+  toStage         GarmentStage
+  actorUserId     String?
+  actor           User?         @relation("StageTransitionActor", fields: [actorUserId], references: [id])
+  occurredAt      DateTime      @default(now())
+  note            String?
+
+  @@index([garmentUnitId])
+}
+
+model Outfit {
+  id                  String   @id @default(uuid())
+  name                String
+  occasion            Occasion
+  lookRentPricePaise  Int
+  lookBuyPricePaise   Int
+  lookRentDays        Int
+
+  outfitProducts OutfitProduct[]
+}
+
+model OutfitProduct {
+  outfitId  String
+  outfit    Outfit  @relation(fields: [outfitId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  position  Int     @default(0)
+
+  @@id([outfitId, productId])
+}
+
+// ---------------------------------------------------------------------------
+// Cart & Wishlist (persistent — closes build spec §7.3)
+// ---------------------------------------------------------------------------
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+  items     CartItem[]
+}
+
+model CartItem {
+  id        String    @id @default(uuid())
+  cartId    String
+  cart      Cart      @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product   @relation(fields: [productId], references: [id])
+  mode      CartMode
+  size      String
+  startDate DateTime?
+  addedAt   DateTime  @default(now())
+
+  // Matches the frontend's addLine behavior: adding the same (product, mode)
+  // replaces the existing line rather than duplicating it.
+  @@unique([cartId, productId, mode])
+}
+
+model WishlistItem {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  addedAt   DateTime @default(now())
+
+  @@id([userId, productId])
+}
+
+// ---------------------------------------------------------------------------
+// Orders / Payments / Refunds
+// ---------------------------------------------------------------------------
+
+model Order {
+  id                  String        @id
+  customerId          String
+  customer            User          @relation("CustomerOrders", fields: [customerId], references: [id])
+  placedAt            DateTime      @default(now())
+  eventDate           DateTime?
+  status              OrderStatus   @default(pending_payment)
+  city                String?
+  // Currency the customer was actually charged in, plus the FX rate applied
+  // at order time (audit trail) — canonical accounting stays in base currency.
+  currency            String        @default("INR")
+  fxRateToBase        Float         @default(1.0)
+  totalPaise          Int
+  depositTotalPaise   Int
+  createdVia          String        @default("shop")
+  idempotencyKey      String?       @unique
+  createdAt           DateTime      @default(now())
+
+  items        OrderItem[]
+  payments     Payment[]
+  deliveryJobs DeliveryJob[]
+  garmentUnits GarmentUnit[] @relation("OrderCurrentUnits")
+
+  @@index([customerId])
+  @@index([status])
+}
+
+model OrderItem {
+  id               String       @id @default(uuid())
+  orderId          String
+  order            Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product      @relation(fields: [productId], references: [id])
+  garmentUnitId    String?
+  garmentUnit      GarmentUnit? @relation(fields: [garmentUnitId], references: [id])
+  mode             CartMode
+  size             String
+  unitPricePaise   Int
+  depositPaise     Int
+  rentDays         Int?
+  rentStartDate    DateTime?
+  rentReturnDate   DateTime?
+  actualReturnDate DateTime?
+
+  refunds Refund[]
+
+  @@index([orderId])
+  @@index([garmentUnitId])
+}
+
+model Payment {
+  id                 String         @id @default(uuid())
+  orderId            String
+  order              Order          @relation(fields: [orderId], references: [id])
+  customerId         String
+  customer           User           @relation(fields: [customerId], references: [id])
+  amountPaise        Int
+  chargedAmountMinor Int
+  chargedCurrency    String
+  method             PaymentMethod
+  status             PaymentStatus  @default(pending)
+  gateway            PaymentGateway @default(stripe)
+  gatewayRef         String?        @unique
+  idempotencyKey     String?        @unique
+  createdAt          DateTime       @default(now())
+
+  refunds Refund[]
+
+  @@index([orderId])
+  @@index([customerId])
+}
+
+model Refund {
+  id           String       @id @default(uuid())
+  orderItemId  String
+  orderItem    OrderItem    @relation(fields: [orderItemId], references: [id])
+  paymentId    String?
+  payment      Payment?     @relation(fields: [paymentId], references: [id])
+  amountPaise  Int
+  reason       String
+  status       RefundStatus @default(pending)
+  gatewayRef   String?
+  actorUserId  String?
+  createdAt    DateTime     @default(now())
+  processedAt  DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// Laundry
+// ---------------------------------------------------------------------------
+
+model LaundryBatch {
+  id                  String          @id @default(uuid())
+  facilityId          String
+  facility            Facility        @relation(fields: [facilityId], references: [id])
+  stage               LaundryStage    @default(received)
+  priority            LaundryPriority @default(standard)
+  startedAt           DateTime        @default(now())
+  estimatedCompleteAt DateTime
+
+  items BatchItem[]
+}
+
+model BatchItem {
+  batchId       String
+  batch         LaundryBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  garmentUnitId String
+  garmentUnit   GarmentUnit  @relation(fields: [garmentUnitId], references: [id])
+
+  @@id([batchId, garmentUnitId])
+}
+
+// ---------------------------------------------------------------------------
+// Delivery
+// ---------------------------------------------------------------------------
+
+model Courier {
+  id    String   @id @default(uuid())
+  name  String
+  zones String[]
+
+  deliveryJobs DeliveryJob[]
+}
+
+model DeliveryJob {
+  id          String         @id @default(uuid())
+  type        DeliveryType
+  orderId     String
+  order       Order          @relation(fields: [orderId], references: [id])
+  windowStart DateTime
+  windowEnd   DateTime
+  zone        String
+  courierId   String?
+  courier     Courier?       @relation(fields: [courierId], references: [id])
+  status      DeliveryStatus @default(scheduled)
+
+  @@index([orderId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (per-user read state — closes build spec §7.11)
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id          String               @id @default(uuid())
+  severity    NotificationSeverity
+  title       String
+  detail      String
+  relatedType RelatedType
+  relatedId   String
+  createdAt   DateTime             @default(now())
+
+  reads NotificationRead[]
+}
+
+model NotificationRead {
+  notificationId String
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt         DateTime     @default(now())
+
+  @@id([notificationId, userId])
+}
+
+// ---------------------------------------------------------------------------
+// Analytics & Currency
+// ---------------------------------------------------------------------------
+
+model DailyMetric {
+  id         String   @id @default(uuid())
+  date       DateTime @db.Date
+  metricName String
+  value      Float
+
+  @@unique([date, metricName])
+}
+
+model FxRate {
+  baseCurrency   String
+  targetCurrency String
+  rate           Float
+  updatedAt      DateTime @default(now())
+
+  @@id([baseCurrency, targetCurrency])
+}
