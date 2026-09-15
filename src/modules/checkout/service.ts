@@ -4,6 +4,8 @@ import { generateOrderId } from "../../lib/orderId";
 import { findFreeUnitIds } from "../availability/service";
 import { convertPaise } from "../../lib/fx";
 import { createPaymentIntent } from "../payments/stripe";
+import { createRazorpayOrder } from "../payments/razorpay";
+import { env } from "../../config/env";
 import type { PricingContext } from "../../lib/pricing";
 import type { Prisma } from "@prisma/client";
 
@@ -155,6 +157,40 @@ async function buildCheckoutResponse(orderId: string) {
 
   const chargeCurrency = order.currency;
   const chargedAmountMinor = convertPaise(order.totalPaise + order.depositTotalPaise, order.fxRateToBase);
+
+  // Razorpay is INR-first (UPI/cards/netbanking for Indian customers);
+  // non-INR orders fall back to Stripe. Pick whichever gateway is actually
+  // configured for this currency so checkout doesn't 500 on a missing key.
+  const useRazorpay = chargeCurrency === "INR" && Boolean(env.razorpay.keyId && env.razorpay.keySecret);
+
+  if (useRazorpay) {
+    const rpOrder = await createRazorpayOrder(chargedAmountMinor, chargeCurrency, orderId);
+
+    const payment = await prisma.payment.create({
+      data: {
+        orderId,
+        customerId: order.customerId,
+        amountPaise: order.totalPaise + order.depositTotalPaise,
+        chargedAmountMinor,
+        chargedCurrency: chargeCurrency,
+        method: "card",
+        gateway: "razorpay",
+        gatewayRef: rpOrder.id,
+      },
+    });
+
+    return {
+      order,
+      payment: {
+        id: payment.id,
+        status: payment.status,
+        razorpayOrderId: rpOrder.id,
+        razorpayKeyId: env.razorpay.keyId,
+        amount: chargedAmountMinor,
+        currency: chargeCurrency,
+      },
+    };
+  }
 
   const intent = await createPaymentIntent(chargedAmountMinor, chargeCurrency, { orderId });
 

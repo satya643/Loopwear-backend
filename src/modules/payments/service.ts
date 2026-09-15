@@ -1,8 +1,9 @@
 import { prisma } from "../../lib/prisma";
 import { ApiError } from "../../lib/errors";
 import { retrievePaymentIntent, createRefund } from "./stripe";
+import { verifyPaymentSignature, createRazorpayRefund } from "./razorpay";
 import { BUSINESS_RULES } from "../../config/business";
-import type { Condition } from "@prisma/client";
+import type { Condition, Payment, Prisma } from "@prisma/client";
 
 /**
  * Idempotent by gateway_ref (the Stripe PaymentIntent id): re-confirming an
@@ -26,38 +27,87 @@ export async function confirmPaymentIntent(paymentIntentId: string) {
 
   const method = intent.payment_method_types?.[0] === "card" ? "card" : "wallet";
 
-  const updatedPayment = await prisma.$transaction(async (tx) => {
-    const p = await tx.payment.update({ where: { id: payment.id }, data: { status: "paid", method } });
-    await tx.order.update({ where: { id: payment.orderId }, data: { status: "confirmed" } });
+  return prisma.$transaction((tx) => finalizePaidPayment(tx, payment, { method }));
+}
 
-    // A "buy" line leaves rental circulation for good the moment payment
-    // clears — it never goes through the rental lifecycle's rented/returned
-    // states (not covered by the original frontend spec, but required so a
-    // bought unit doesn't linger in the rentable pool). Rent-mode units stay
-    // `reserved` until the console dispatches the order (see
-    // console/orders/service.ts, which drives reserved -> rented).
-    const buyItems = await tx.orderItem.findMany({
-      where: { orderId: payment.orderId, mode: "buy", garmentUnitId: { not: null } },
-    });
-    for (const item of buyItems) {
-      await tx.garmentUnit.update({
-        where: { id: item.garmentUnitId! },
-        data: { stage: "sold", currentOrderId: null, lastMovedAt: new Date() },
-      });
-      await tx.stageTransition.create({
-        data: {
-          garmentUnitId: item.garmentUnitId!,
-          fromStage: "reserved",
-          toStage: "sold",
-          note: `Sold via order ${payment.orderId}`,
-        },
-      });
-    }
+/**
+ * Verifies a Razorpay checkout result and marks the order paid. Idempotent
+ * by gateway_ref (the Razorpay order id) for the same reason as the Stripe
+ * path above — retries and duplicate client calls are no-ops.
+ */
+export async function confirmRazorpayPayment(razorpayOrderId: string, razorpayPaymentId: string, signature: string) {
+  const payment = await prisma.payment.findUnique({ where: { gatewayRef: razorpayOrderId } });
+  if (!payment) throw ApiError.notFound("No payment found for this order");
+  if (payment.status === "paid") return payment;
 
-    return p;
+  if (!verifyPaymentSignature(razorpayOrderId, razorpayPaymentId, signature)) {
+    throw ApiError.badRequest("Payment signature verification failed");
+  }
+
+  return prisma.$transaction((tx) =>
+    finalizePaidPayment(tx, payment, { method: "card", gatewayPaymentRef: razorpayPaymentId })
+  );
+}
+
+/**
+ * Same as confirmRazorpayPayment, but for the webhook path: the webhook's
+ * own HMAC signature (checked by the caller before this runs) already
+ * proves the event is genuine, so there's no separate checkout signature to
+ * verify here.
+ */
+export async function markRazorpayPaymentPaidFromWebhook(razorpayOrderId: string, razorpayPaymentId: string) {
+  const payment = await prisma.payment.findUnique({ where: { gatewayRef: razorpayOrderId } });
+  if (!payment) throw ApiError.notFound("No payment found for this order");
+  if (payment.status === "paid") return payment;
+
+  return prisma.$transaction((tx) =>
+    finalizePaidPayment(tx, payment, { method: "card", gatewayPaymentRef: razorpayPaymentId })
+  );
+}
+
+/**
+ * Shared "mark paid + release inventory" logic for every gateway: updates
+ * the payment and order, and moves any "buy" line's unit to `sold` for good
+ * (it never goes through the rental lifecycle's rented/returned states —
+ * not covered by the original frontend spec, but required so a bought unit
+ * doesn't linger in the rentable pool). Rent-mode units stay `reserved`
+ * until the console dispatches the order (see console/orders/service.ts,
+ * which drives reserved -> rented).
+ */
+async function finalizePaidPayment(
+  tx: Prisma.TransactionClient,
+  payment: Payment,
+  opts: { method: "card" | "wallet"; gatewayPaymentRef?: string }
+) {
+  const p = await tx.payment.update({
+    where: { id: payment.id },
+    data: {
+      status: "paid",
+      method: opts.method,
+      ...(opts.gatewayPaymentRef ? { gatewayPaymentRef: opts.gatewayPaymentRef } : {}),
+    },
   });
+  await tx.order.update({ where: { id: payment.orderId }, data: { status: "confirmed" } });
 
-  return updatedPayment;
+  const buyItems = await tx.orderItem.findMany({
+    where: { orderId: payment.orderId, mode: "buy", garmentUnitId: { not: null } },
+  });
+  for (const item of buyItems) {
+    await tx.garmentUnit.update({
+      where: { id: item.garmentUnitId! },
+      data: { stage: "sold", currentOrderId: null, lastMovedAt: new Date() },
+    });
+    await tx.stageTransition.create({
+      data: {
+        garmentUnitId: item.garmentUnitId!,
+        fromStage: "reserved",
+        toStage: "sold",
+        note: `Sold via order ${payment.orderId}`,
+      },
+    });
+  }
+
+  return p;
 }
 
 /**
@@ -98,6 +148,15 @@ export async function refundDepositForOrderItem(orderItemId: string, actorUserId
 
   if (amountPaise > 0 && payment?.gatewayRef) {
     try {
+      if (payment.gateway === "razorpay") {
+        if (!payment.gatewayPaymentRef) throw new Error("Razorpay payment has no charge id to refund");
+        const rpRefund = await createRazorpayRefund(payment.gatewayPaymentRef, amountPaise);
+        return prisma.refund.update({
+          where: { id: refund.id },
+          data: { status: "processed", processedAt: new Date(), gatewayRef: rpRefund.id },
+        });
+      }
+
       const stripeRefund = await createRefund(payment.gatewayRef, amountPaise);
       return prisma.refund.update({
         where: { id: refund.id },

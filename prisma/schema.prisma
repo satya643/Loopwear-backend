@@ -103,6 +103,7 @@ enum PaymentStatus {
 
 enum PaymentGateway {
   stripe
+  razorpay
   mock
 }
 
@@ -429,6 +430,11 @@ model Payment {
   status             PaymentStatus  @default(pending)
   gateway            PaymentGateway @default(stripe)
   gatewayRef         String?        @unique
+  // Only used for gateways where the charge id differs from gatewayRef (e.g.
+  // Razorpay: gatewayRef holds the order id, this holds the payment id that
+  // refunds must reference). Null for Stripe, where gatewayRef IS the
+  // refundable id (the PaymentIntent).
+  gatewayPaymentRef  String?
   idempotencyKey     String?        @unique
   createdAt          DateTime       @default(now())
 
