@@ -22,6 +22,14 @@ consoleNotificationsRouter.get(
     });
     const readSet = new Set(reads.map((r) => r.notificationId));
 
+    // unreadCount must reflect ALL notifications, not just the 50 most
+    // recent shown above — otherwise it silently under-counts once there
+    // are more than 50 notifications with any unread ones outside that window.
+    const [totalCount, readCountForUser] = await Promise.all([
+      prisma.notification.count(),
+      prisma.notificationRead.count({ where: { userId: req.auth!.userId } }),
+    ]);
+
     res.json({
       items: notifications.map((n) => ({
         id: n.id,
@@ -33,7 +41,7 @@ consoleNotificationsRouter.get(
         createdAt: n.createdAt,
         read: readSet.has(n.id),
       })),
-      unreadCount: notifications.length - readSet.size,
+      unreadCount: Math.max(0, totalCount - readCountForUser),
     });
   })
 );

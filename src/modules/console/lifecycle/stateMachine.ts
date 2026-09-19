@@ -10,7 +10,16 @@ import { ApiError } from "../../../lib/errors";
  */
 const TRANSITIONS: Record<GarmentStage, GarmentStage[]> = {
   available: ["reserved", "retired"],
-  reserved: ["rented", "available"],
+  // `reserved -> available` (releasing a hold) is intentionally NOT allowed
+  // through this generic manual endpoint. A reserved unit always has a
+  // currentOrderId; releasing it here without touching that Order left the
+  // order's dates still "blocking" the unit for other customers in
+  // findFreeUnitIds (which keys off Order/OrderItem, not GarmentUnit.stage) —
+  // an inventory availability desync. The only correct way to release a
+  // reservation is cancelling its order (orders/service.ts cancelMyOrder,
+  // console/orders/service.ts setOrderStatus("cancelled")), which updates
+  // both atomically in one transaction.
+  reserved: ["rented"],
   rented: ["returned"],
   returned: ["inspection"],
   inspection: ["laundry", "quality", "retired"],

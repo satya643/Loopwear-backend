@@ -9,6 +9,11 @@ export const addCartItemSchema = z.object({
   startDate: z
     .string()
     .refine((v) => !Number.isNaN(Date.parse(v)), "invalid startDate")
+    .refine((v) => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return new Date(v) >= today;
+    }, "startDate cannot be in the past")
     .optional(),
 });
 

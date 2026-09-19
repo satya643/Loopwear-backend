@@ -1,5 +1,6 @@
 import { prisma } from "../../../lib/prisma";
 import { ApiError } from "../../../lib/errors";
+import { paginatedResponse, toSkipTake, type Pagination } from "../../../lib/pagination";
 import type { LaundryStage } from "@prisma/client";
 
 const BATCH_SEQUENCE: LaundryStage[] = ["received", "washing", "drying", "pressing", "quality", "ready"];
@@ -14,6 +15,7 @@ function serializeBatch(batch: any) {
   return {
     id: batch.id,
     facilityId: batch.facilityId,
+    facility: batch.facility?.name,
     stage: batch.stage,
     priority: batch.priority,
     startedAt: batch.startedAt,
@@ -26,12 +28,18 @@ function serializeBatch(batch: any) {
   };
 }
 
-export async function listBatches() {
-  const batches = await prisma.laundryBatch.findMany({
-    include: { _count: { select: { items: true } } },
-    orderBy: { startedAt: "desc" },
-  });
-  return batches.map(serializeBatch);
+export async function listBatches(pagination: Pagination) {
+  const { skip, take } = toSkipTake(pagination);
+  const [batches, total] = await Promise.all([
+    prisma.laundryBatch.findMany({
+      include: { _count: { select: { items: true } }, facility: true },
+      orderBy: { startedAt: "desc" },
+      skip,
+      take,
+    }),
+    prisma.laundryBatch.count(),
+  ]);
+  return paginatedResponse(batches.map(serializeBatch), total, pagination);
 }
 
 export async function createBatch(input: { facilityId: string; garmentUnitIds: string[]; priority: "standard" | "rush" }) {
@@ -53,7 +61,7 @@ export async function createBatch(input: { facilityId: string; garmentUnitIds: s
       estimatedCompleteAt: new Date(Date.now() + estimateMinutesFor(input.priority) * 60 * 1000),
       items: { createMany: { data: input.garmentUnitIds.map((garmentUnitId) => ({ garmentUnitId })) } },
     },
-    include: { _count: { select: { items: true } } },
+    include: { _count: { select: { items: true } }, facility: true },
   });
   return serializeBatch(batch);
 }
@@ -78,7 +86,7 @@ export async function advanceBatch(batchId: string, actorUserId: string) {
     const updated = await tx.laundryBatch.update({
       where: { id: batchId },
       data: { stage: nextStage },
-      include: { _count: { select: { items: true } } },
+      include: { _count: { select: { items: true } }, facility: true },
     });
 
     if (nextStage === "quality" || nextStage === "ready") {

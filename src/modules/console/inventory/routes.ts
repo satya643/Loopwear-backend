@@ -6,6 +6,7 @@ import { validateBody, validateQuery } from "../../../middleware/validate";
 import { prisma } from "../../../lib/prisma";
 import { ApiError } from "../../../lib/errors";
 import { paginatedResponse, toSkipTake } from "../../../lib/pagination";
+import { CONDITION_LABELS } from "../../../lib/enumLabels";
 import { listUnitsQuerySchema, transitionSchema } from "./schemas";
 import { transitionGarmentUnit, getLifecycleCounts } from "../lifecycle/stateMachine";
 
@@ -32,7 +33,10 @@ inventoryRouter.get(
     const [rows, total] = await Promise.all([
       prisma.garmentUnit.findMany({
         where,
-        include: { product: { select: { id: true, name: true, brand: true } }, currentOrder: { select: { id: true } } },
+        include: {
+          product: { select: { id: true, name: true, brand: true, category: true, color: true } },
+          currentOrder: { select: { id: true, customer: { select: { name: true } } } },
+        },
         orderBy: { lastMovedAt: "desc" },
         skip,
         take,
@@ -45,13 +49,18 @@ inventoryRouter.get(
         rows.map((u) => ({
           id: u.id,
           sku: u.sku,
+          name: u.product.name,
+          category: u.product.category,
+          color: u.product.color,
           product: u.product,
           size: u.size,
           stage: u.stage,
           condition: u.condition,
+          conditionLabel: CONDITION_LABELS[u.condition] ?? u.condition,
           lastMovedAt: u.lastMovedAt,
           timesRented: u.timesRented,
           currentOrderId: u.currentOrderId,
+          currentCustomerName: u.currentOrder?.customer?.name ?? null,
           facilityId: u.facilityId,
         })),
         total,

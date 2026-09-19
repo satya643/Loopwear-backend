@@ -12,6 +12,18 @@ function serializeOrder(order: any, ctx: PricingContext) {
     placedAt: order.placedAt,
     eventDate: order.eventDate,
     city: order.city,
+    delivery: {
+      fullName: order.deliveryName,
+      email: order.deliveryEmail,
+      phone: order.deliveryPhone,
+      addressLine1: order.deliveryAddressLine1,
+      addressLine2: order.deliveryAddressLine2,
+      city: order.city,
+      state: order.deliveryState,
+      postalCode: order.deliveryPostalCode,
+      country: order.deliveryCountry,
+      deliveryNote: order.deliveryNote,
+    },
     pricing: presentPricing({ totalPaise: order.totalPaise, depositTotalPaise: order.depositTotalPaise }, ctx),
     items:
       order.items?.map((item: any) => ({

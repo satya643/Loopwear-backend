@@ -1,5 +1,6 @@
 import { prisma } from "../../../lib/prisma";
 import { ApiError } from "../../../lib/errors";
+import { paginatedResponse, type Pagination } from "../../../lib/pagination";
 
 /**
  * `delayed` is derived at read time from window_end vs now, not a value an
@@ -29,19 +30,24 @@ function serialize(job: any) {
   };
 }
 
-export async function listDeliveryJobs(filters: { status?: string; type?: string }) {
+export async function listDeliveryJobs(filters: { status?: string; type?: string }, pagination: Pagination) {
   const where: import("@prisma/client").Prisma.DeliveryJobWhereInput = {};
   if (filters.type) where.type = filters.type as never;
   // `delayed` isn't filterable directly in SQL since it's derived; fetch
-  // broadly and filter in memory when that specific status is requested.
+  // broadly, filter in memory when that specific status is requested, THEN
+  // paginate the filtered result — pagination must come after the derived
+  // filter or `total`/page slicing would be wrong relative to what's shown.
   const jobs = await prisma.deliveryJob.findMany({
     where,
     include: { order: { include: { customer: { select: { name: true } } } }, courier: true },
     orderBy: { windowStart: "asc" },
   });
-  const serialized = jobs.map(serialize);
-  if (filters.status) return serialized.filter((j) => j.status === filters.status);
-  return serialized;
+  let serialized = jobs.map(serialize);
+  if (filters.status) serialized = serialized.filter((j) => j.status === filters.status);
+
+  const total = serialized.length;
+  const { skip, take } = { skip: (pagination.page - 1) * pagination.pageSize, take: pagination.pageSize };
+  return paginatedResponse(serialized.slice(skip, skip + take), total, pagination);
 }
 
 export async function reassignCourier(jobId: string, courierId: string) {

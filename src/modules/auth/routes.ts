@@ -9,6 +9,8 @@ import {
   signInSchema,
   requestOtpLoginSchema,
   continueWithGoogleSchema,
+  requestPasswordResetSchema,
+  resetPasswordSchema,
 } from "./schemas";
 import * as authService from "./service";
 
@@ -96,5 +98,23 @@ authRouter.get(
   asyncHandler(async (req, res) => {
     const user = await authService.getSessionUser(req.auth!.userId);
     res.json({ user });
+  })
+);
+
+authRouter.post(
+  "/request-password-reset",
+  validateBody(requestPasswordResetSchema),
+  asyncHandler(async (req, res) => {
+    await authService.requestPasswordReset(req.body.email, meta(req));
+    res.status(204).end();
+  })
+);
+
+authRouter.post(
+  "/reset-password",
+  validateBody(resetPasswordSchema),
+  asyncHandler(async (req, res) => {
+    await authService.resetPassword(req.body.token, req.body.password);
+    res.status(204).end();
   })
 );

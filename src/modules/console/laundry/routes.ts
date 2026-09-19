@@ -3,7 +3,8 @@ import { z } from "zod";
 import { asyncHandler } from "../../../lib/asyncHandler";
 import { requireAuth } from "../../../middleware/auth";
 import { requireRole } from "../../../middleware/rbac";
-import { validateBody } from "../../../middleware/validate";
+import { validateBody, validateQuery } from "../../../middleware/validate";
+import { paginationSchema } from "../../../lib/pagination";
 import * as laundryService from "./service";
 
 export const laundryRouter = Router();
@@ -11,8 +12,10 @@ laundryRouter.use(requireAuth, requireRole("operator", "admin"));
 
 laundryRouter.get(
   "/batches",
-  asyncHandler(async (_req, res) => {
-    res.json({ items: await laundryService.listBatches() });
+  validateQuery(paginationSchema),
+  asyncHandler(async (req, res) => {
+    const pagination = req.query as unknown as ReturnType<(typeof paginationSchema)["parse"]>;
+    res.json(await laundryService.listBatches(pagination));
   })
 );
 

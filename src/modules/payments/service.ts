@@ -10,10 +10,20 @@ import type { Condition } from "@prisma/client";
  * webhook delivery, is a no-op rather than double-processing the order.
  * Status is always re-verified against Stripe directly — never trust a
  * client-supplied "it succeeded".
+ *
+ * `expectedUserId` is omitted only for the Stripe-webhook caller (already
+ * authenticated by signature verification, not a user session). Every
+ * customer-facing caller must pass it: without it, any authenticated
+ * customer who learns another customer's Stripe paymentIntentId could read
+ * that payment's details and force its order-confirmed/unit-sold side
+ * effects to fire early (IDOR). A mismatch reads as 404, not 403 — same
+ * "don't confirm the resource exists" pattern used for order ownership.
  */
-export async function confirmPaymentIntent(paymentIntentId: string) {
+export async function confirmPaymentIntent(paymentIntentId: string, expectedUserId?: string) {
   const payment = await prisma.payment.findUnique({ where: { gatewayRef: paymentIntentId } });
-  if (!payment) throw ApiError.notFound("No payment found for this payment intent");
+  if (!payment || (expectedUserId && payment.customerId !== expectedUserId)) {
+    throw ApiError.notFound("No payment found for this payment intent");
+  }
   if (payment.status === "paid") return payment;
 
   const intent = await retrievePaymentIntent(paymentIntentId);
@@ -73,6 +83,11 @@ export async function refundDepositForOrderItem(orderItemId: string, actorUserId
   if (!item) throw ApiError.notFound("Order item not found");
   if (item.mode !== "rent") throw ApiError.badRequest("Only rental items carry a refundable deposit");
   if (item.depositPaise === 0) throw ApiError.badRequest("This item has no deposit to refund");
+  if (!item.actualReturnDate) {
+    throw ApiError.badRequest(
+      "This item hasn't been marked returned yet — a deposit can only be refunded after return/inspection"
+    );
+  }
 
   const existingRefund = await prisma.refund.findFirst({ where: { orderItemId } });
   if (existingRefund) return existingRefund;
@@ -99,14 +114,46 @@ export async function refundDepositForOrderItem(orderItemId: string, actorUserId
   if (amountPaise > 0 && payment?.gatewayRef) {
     try {
       const stripeRefund = await createRefund(payment.gatewayRef, amountPaise);
-      return prisma.refund.update({
+      const processed = await prisma.refund.update({
         where: { id: refund.id },
         data: { status: "processed", processedAt: new Date(), gatewayRef: stripeRefund.id },
       });
+      await syncPaymentRefundStatus(payment.id);
+      return processed;
     } catch (err) {
       return prisma.refund.update({ where: { id: refund.id }, data: { status: "failed" } });
     }
   }
 
-  return prisma.refund.update({ where: { id: refund.id }, data: { status: "processed", processedAt: new Date() } });
+  const processed = await prisma.refund.update({
+    where: { id: refund.id },
+    data: { status: "processed", processedAt: new Date() },
+  });
+  await syncPaymentRefundStatus(payment?.id);
+  return processed;
+}
+
+/**
+ * `Payment.status` never advanced past "paid" after a refund — the enum
+ * values `refunded`/`partially_refunded` existed but nothing ever wrote
+ * them, so refunded payments stayed invisible to any query/report filtering
+ * on payment status. Recomputed from the sum of this payment's processed
+ * refunds vs. what it actually charged (rent price + deposit) — a
+ * deposit-only refund is correctly "partial" relative to the full charge.
+ */
+async function syncPaymentRefundStatus(paymentId?: string): Promise<void> {
+  if (!paymentId) return;
+  const [payment, refundedAgg] = await Promise.all([
+    prisma.payment.findUnique({ where: { id: paymentId } }),
+    prisma.refund.aggregate({ where: { paymentId, status: "processed" }, _sum: { amountPaise: true } }),
+  ]);
+  if (!payment) return;
+
+  const refundedTotal = refundedAgg._sum.amountPaise ?? 0;
+  if (refundedTotal <= 0) return;
+
+  const nextStatus = refundedTotal >= payment.amountPaise ? "refunded" : "partially_refunded";
+  if (payment.status !== nextStatus) {
+    await prisma.payment.update({ where: { id: paymentId }, data: { status: nextStatus } });
+  }
 }

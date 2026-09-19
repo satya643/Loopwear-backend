@@ -50,3 +50,12 @@ export const requestOtpLoginSchema = z.object({
 export const continueWithGoogleSchema = z.object({
   idToken: z.string().min(1),
 });
+
+export const requestPasswordResetSchema = z.object({
+  email: z.string().email().transform((v) => v.toLowerCase()),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8).max(128),
+});

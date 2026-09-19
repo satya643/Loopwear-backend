@@ -15,6 +15,7 @@
     "jobs:daily-metrics": "tsx src/jobs/dailyMetrics.ts",
     "jobs:fx-rates": "tsx src/jobs/fxRates.ts",
     "jobs:delayed-deliveries": "tsx src/jobs/delayedDeliveries.ts",
+    "jobs:release-stale-orders": "tsx src/jobs/releaseStalePendingOrders.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },

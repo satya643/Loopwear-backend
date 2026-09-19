@@ -9,9 +9,26 @@ import * as checkoutService from "./service";
 export const checkoutRouter = Router();
 checkoutRouter.use(requireAuth);
 
+// Matches the frontend's DeliveryDetails shape exactly (lib/shop/types.ts) —
+// previously the schema only accepted top-level eventDate/city, so zod
+// silently stripped the entire `delivery` object the frontend actually sends.
+const deliverySchema = z.object({
+  fullName: z.string().min(1),
+  email: z.string().email(),
+  phone: z.string().min(1),
+  addressLine1: z.string().min(1),
+  addressLine2: z.string().optional(),
+  city: z.string().min(1),
+  state: z.string().min(1),
+  postalCode: z.string().min(1),
+  country: z.string().min(1),
+  deliveryNote: z.string().optional(),
+});
+
 const checkoutSchema = z.object({
   eventDate: z.string().optional(),
   city: z.string().optional(),
+  delivery: deliverySchema.optional(),
 });
 
 checkoutRouter.post(

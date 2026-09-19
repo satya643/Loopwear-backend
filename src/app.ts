@@ -5,7 +5,7 @@ import morgan from "morgan";
 
 import { optionalAuth } from "./middleware/auth";
 import { resolveCurrency } from "./middleware/currency";
-import { authRateLimiter } from "./middleware/rateLimit";
+import { authRateLimiter, generalRateLimiter } from "./middleware/rateLimit";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 
 import { authRouter } from "./modules/auth/routes";
@@ -44,6 +44,10 @@ export function createApp() {
   // Resolves req.auth (if a valid bearer token is present) and req.currency
   // for every request; individual routers still enforce requireAuth/RBAC.
   app.use(optionalAuth, resolveCurrency);
+
+  // Webhook (mounted above, before express.json()) intentionally bypasses
+  // this — Stripe's own IPs/volume must never be throttled by this limiter.
+  app.use("/api", generalRateLimiter);
 
   app.use("/api/auth", authRateLimiter, authRouter);
   // catalogRouter defines its own /products and /occasions paths internally.

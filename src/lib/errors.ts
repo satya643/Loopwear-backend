@@ -16,8 +16,8 @@ export class ApiError extends Error {
   static unauthorized(message = "Authentication required") {
     return new ApiError(401, "unauthorized", message);
   }
-  static forbidden(message = "You do not have access to this resource") {
-    return new ApiError(403, "forbidden", message);
+  static forbidden(message = "You do not have access to this resource", details?: unknown) {
+    return new ApiError(403, "forbidden", message, details);
   }
   static notFound(message = "Not found") {
     return new ApiError(404, "not_found", message);
@@ -27,5 +27,8 @@ export class ApiError extends Error {
   }
   static tooManyRequests(message = "Too many requests") {
     return new ApiError(429, "rate_limited", message);
+  }
+  static badGateway(message: string, details?: unknown) {
+    return new ApiError(502, "bad_gateway", message, details);
   }
 }

@@ -34,7 +34,17 @@ export const env = {
     dailySendCap: optionalInt("OTP_DAILY_SEND_CAP", 5),
   },
 
+  passwordReset: {
+    ttlMinutes: optionalInt("PASSWORD_RESET_TTL_MINUTES", 30),
+    resendCooldownSeconds: optionalInt("PASSWORD_RESET_RESEND_COOLDOWN_SECONDS", 60),
+  },
+
   smsProviderApiKey: process.env.SMS_PROVIDER_API_KEY ?? "",
+  emailProviderApiKey: process.env.EMAIL_PROVIDER_API_KEY ?? "",
+
+  // Where the frontend lives — used to build the password-reset link sent by
+  // email (the backend has no reset-password UI of its own).
+  frontendBaseUrl: process.env.FRONTEND_BASE_URL ?? "http://localhost:3000",
 
   google: {
     // Only the client ID is needed: it's the audience we verify Google ID
@@ -56,5 +66,10 @@ export const env = {
   rateLimit: {
     windowMinutes: optionalInt("RATE_LIMIT_WINDOW_MINUTES", 15),
     maxAuthRequests: optionalInt("RATE_LIMIT_MAX_AUTH_REQUESTS", 20),
+    // Broader than the auth-specific limiter: covers checkout, cart, and
+    // console endpoints, which previously had no throttling at all (a
+    // scripted client could hammer /api/checkout — each call creates a real
+    // Stripe PaymentIntent — or spam console list endpoints, unthrottled).
+    maxGeneralRequests: optionalInt("RATE_LIMIT_MAX_GENERAL_REQUESTS", 300),
   },
 };

@@ -173,14 +173,15 @@ model User {
   preferredCurrency String?
   createdAt         DateTime @default(now())
 
-  cart               Cart?
-  wishlistItems      WishlistItem[]
-  orders             Order[]             @relation("CustomerOrders")
-  payments           Payment[]
-  sessions           Session[]
-  stageTransitions   StageTransition[]   @relation("StageTransitionActor")
-  reviews            Review[]
-  notificationReads  NotificationRead[]
+  cart                 Cart?
+  wishlistItems        WishlistItem[]
+  orders               Order[]              @relation("CustomerOrders")
+  payments             Payment[]
+  sessions             Session[]
+  stageTransitions     StageTransition[]    @relation("StageTransitionActor")
+  reviews              Review[]
+  notificationReads    NotificationRead[]
+  passwordResetTokens  PasswordResetToken[]
 }
 
 model Session {
@@ -204,6 +205,23 @@ model OtpCode {
   lastSentAt       DateTime  @default(now())
   sendCount        Int       @default(0)
   sendWindowStart  DateTime  @default(now())
+}
+
+// One-time password-reset link, delivered by email. tokenHash is a SHA-256
+// digest of the raw token sent to the user — unlike bcrypt, SHA-256 is
+// deterministic, so we can look the record up directly by hash without
+// needing a separate identifier alongside the token.
+model PasswordResetToken {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  requestIp  String?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
@@ -374,6 +392,18 @@ model Order {
   eventDate           DateTime?
   status              OrderStatus   @default(pending_payment)
   city                String?
+  // Shipping/delivery address — the checkout request body already carried
+  // this (frontend's `DeliveryDetails`) but nothing on the backend accepted
+  // or stored it, so every order was placed with no address to ship to at all.
+  deliveryName         String?
+  deliveryEmail        String?
+  deliveryPhone        String?
+  deliveryAddressLine1 String?
+  deliveryAddressLine2 String?
+  deliveryState        String?
+  deliveryPostalCode   String?
+  deliveryCountry      String?
+  deliveryNote         String?
   // Currency the customer was actually charged in, plus the FX rate applied
   // at order time (audit trail) — canonical accounting stays in base currency.
   currency            String        @default("INR")
@@ -416,6 +446,10 @@ model OrderItem {
   @@index([garmentUnitId])
 }
 
+// NOTE: a hand-written migration (20260919000000_payment_active_unique_per_order)
+// also adds a partial unique index on (orderId) WHERE status IN ('pending','paid')
+// — not representable in this DSL — so only one active payment can ever exist
+// per order at the DB level. Don't let a future `prisma migrate dev` diff drop it.
 model Payment {
   id                 String         @id @default(uuid())
   orderId            String

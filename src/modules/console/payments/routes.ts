@@ -37,7 +37,21 @@ consolePaymentsRouter.get(
       }),
       prisma.payment.count({ where }),
     ]);
-    res.json(paginatedResponse(rows, total, { page, pageSize }));
+    res.json(
+      paginatedResponse(
+        rows.map((p) => ({
+          id: p.id,
+          order: p.order.id,
+          customer: p.customer.name,
+          amountPaise: p.amountPaise,
+          method: p.method,
+          status: p.status,
+          date: p.createdAt,
+        })),
+        total,
+        { page, pageSize }
+      )
+    );
   })
 );
 

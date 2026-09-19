@@ -39,4 +39,28 @@ export const BUSINESS_RULES = {
    * calendar has no real turnaround model to borrow from.
    */
   turnaroundBufferDays: 2,
+
+  /**
+   * A checkout reserves garment units and clears the cart as soon as the
+   * Order row commits — *before* payment is confirmed (see
+   * modules/checkout/service.ts). If the customer abandons checkout (closes
+   * the tab, payment never completes, no webhook fires), nothing previously
+   * released that reservation: the order sat in `pending_payment` and its
+   * units stayed `reserved` forever, invisible/unbookable to everyone else.
+   * jobs/releaseStalePendingOrders.ts cancels orders past this age with no
+   * paid payment and releases their units back to `available`.
+   */
+  pendingPaymentReleaseMinutes: 60,
+
+  /**
+   * Nothing anywhere ever created a DeliveryJob row — the console's Delivery
+   * board (fully built for listing/reassigning/completing jobs) was
+   * permanently empty on a fresh install. A dropoff job is now auto-created
+   * when an order ships (console/orders/service.ts), with a delivery window
+   * this many days out. No per-facility/zone routing model exists yet (only
+   * a single seeded facility + no zone-matching logic), so `zone` is just
+   * the order's delivery city — good enough for a single-facility operation,
+   * a real gap once there's more than one.
+   */
+  defaultDeliveryWindowDays: 2,
 };

@@ -3,6 +3,7 @@ import { prisma } from "../../../lib/prisma";
 import { ApiError } from "../../../lib/errors";
 import { paginatedResponse, toSkipTake, type Pagination } from "../../../lib/pagination";
 import { ORDER_STATUS_LABELS } from "../../../lib/enumLabels";
+import { BUSINESS_RULES } from "../../../config/business";
 
 const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   pending_payment: ["confirmed", "cancelled"],
@@ -21,9 +22,23 @@ function serializeOrder(order: any) {
     status: order.status,
     statusLabel: ORDER_STATUS_LABELS[order.status] ?? order.status,
     customer: order.customer ? { id: order.customer.id, name: order.customer.name, email: order.customer.email } : undefined,
+    customerName: order.customer?.name,
+    garmentNames: order.items?.map((item: any) => item.product?.name).filter(Boolean),
     placedAt: order.placedAt,
     eventDate: order.eventDate,
     city: order.city,
+    delivery: {
+      fullName: order.deliveryName,
+      email: order.deliveryEmail,
+      phone: order.deliveryPhone,
+      addressLine1: order.deliveryAddressLine1,
+      addressLine2: order.deliveryAddressLine2,
+      city: order.city,
+      state: order.deliveryState,
+      postalCode: order.deliveryPostalCode,
+      country: order.deliveryCountry,
+      deliveryNote: order.deliveryNote,
+    },
     totalPaise: order.totalPaise,
     depositTotalPaise: order.depositTotalPaise,
     currency: order.currency,
@@ -46,7 +61,10 @@ export async function listOrders(filters: { status?: string; q?: string }, pagin
   const [rows, total] = await Promise.all([
     prisma.order.findMany({
       where,
-      include: { customer: { select: { id: true, name: true, email: true } } },
+      include: {
+        customer: { select: { id: true, name: true, email: true } },
+        items: { include: { product: { select: { name: true } } } },
+      },
       orderBy: { placedAt: "desc" },
       skip,
       take,
@@ -101,6 +119,24 @@ export async function setOrderStatus(id: string, toStatus: OrderStatus, actorUse
             toStage: "rented",
             actorUserId,
             note: `Dispatched with order ${id}`,
+          },
+        });
+      }
+
+      // Nothing previously created a DeliveryJob at all — the console's
+      // Delivery board had no way to ever show this order. One dropoff job
+      // per order, created once (guarded below) at the natural dispatch point.
+      const alreadyHasDropoff = await tx.deliveryJob.findFirst({ where: { orderId: id, type: "dropoff" } });
+      if (!alreadyHasDropoff) {
+        const windowStart = new Date();
+        const windowEnd = new Date(windowStart.getTime() + BUSINESS_RULES.defaultDeliveryWindowDays * 24 * 60 * 60 * 1000);
+        await tx.deliveryJob.create({
+          data: {
+            type: "dropoff",
+            orderId: id,
+            windowStart,
+            windowEnd,
+            zone: order.city ?? "Unassigned",
           },
         });
       }

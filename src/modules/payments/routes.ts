@@ -17,7 +17,7 @@ paymentsRouter.post(
   requireAuth,
   validateBody(confirmSchema),
   asyncHandler(async (req, res) => {
-    const payment = await paymentsService.confirmPaymentIntent(req.body.paymentIntentId);
+    const payment = await paymentsService.confirmPaymentIntent(req.body.paymentIntentId, req.auth!.userId);
     res.json({ payment });
   })
 );
