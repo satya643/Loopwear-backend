@@ -46,6 +46,12 @@ export const env = {
   // email (the backend has no reset-password UI of its own).
   frontendBaseUrl: process.env.FRONTEND_BASE_URL ?? "http://localhost:3000",
 
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID ?? "",
+    authToken: process.env.TWILIO_AUTH_TOKEN ?? "",
+    fromNumber: process.env.TWILIO_FROM_NUMBER ?? "",
+  },
+
   google: {
     // Only the client ID is needed: it's the audience we verify Google ID
     // tokens against, not a secret.
@@ -55,6 +61,12 @@ export const env = {
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY ?? "",
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
+  },
+
+  razorpay: {
+    keyId: process.env.RAZORPAY_KEY_ID ?? "",
+    keySecret: process.env.RAZORPAY_KEY_SECRET ?? "",
+    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? "",
   },
 
   currency: {
