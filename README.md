@@ -21,6 +21,14 @@ npm run seed                # demo users/products/units
 npm run dev                 # http://localhost:4000
 ```
 
+`npm run dev` always applies any pending migrations first (via a `predev`
+hook running `prisma migrate deploy`) — so after pulling new commits, just
+re-run `npm run dev` rather than manually tracking whether new migrations
+landed. If you see a Prisma error like `column ... does not exist` or
+`table ... does not exist`, it means you ran the server some other way
+(e.g. `tsx src/server.ts` directly) that skipped this hook; run
+`npx prisma migrate deploy` yourself in that case.
+
 Demo accounts from the seed script (password `Password123!`):
 - `admin@loopwear.dev` — role `admin` (Concourse access)
 - `customer@loopwear.dev` — role `customer`
