@@ -33,7 +33,7 @@ async function allocateUnitForLine(
 ): Promise<AllocationResult> {
   const candidateIds =
     mode === "buy"
-      ? (await tx.garmentUnit.findMany({ where: { productId, size, stage: "available" }, select: { id: true } })).map(
+      ? (await tx.garmentUnit.findMany({ where: { variant: { productId }, size, stage: "available" }, select: { id: true } })).map(
           (u) => u.id
         )
       : await findFreeUnitIds(tx, productId, size, start, end);
@@ -211,4 +211,39 @@ async function buildCheckoutResponse(orderId: string) {
     order,
     payment: { id: payment.id, status: payment.status, clientSecret: intent.client_secret },
   };
+}
+
+/**
+ * Undoes exactly what allocateUnitForLine did: every unit this order was
+ * holding goes back to `available` (never back to its pre-checkout stage —
+ * checkout only ever reserves units that were already `available`, per
+ * allocateUnitForLine's own candidate query), the order moves to
+ * `cancelled`, and any non-paid payment attached to it to `failed`.
+ * Idempotent — safe to call on an order that's already been moved on for
+ * any reason (skips it rather than erroring), so both the abandoned-
+ * reservation job and an explicit gateway-failure callback can call this
+ * without coordinating with each other.
+ */
+export async function releaseAbandonedOrder(orderId: string, reason: string) {
+  await prisma.$transaction(async (tx) => {
+    const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order || order.status !== "pending_payment") return;
+
+    for (const item of order.items) {
+      if (!item.garmentUnitId) continue;
+      const unit = await tx.garmentUnit.findUnique({ where: { id: item.garmentUnitId } });
+      if (!unit || unit.currentOrderId !== orderId) continue;
+
+      await tx.garmentUnit.update({
+        where: { id: unit.id },
+        data: { stage: "available", currentOrderId: null, lastMovedAt: new Date() },
+      });
+      await tx.stageTransition.create({
+        data: { garmentUnitId: unit.id, fromStage: unit.stage, toStage: "available", note: reason },
+      });
+    }
+
+    await tx.payment.updateMany({ where: { orderId, status: { not: "paid" } }, data: { status: "failed" } });
+    await tx.order.update({ where: { id: orderId }, data: { status: "cancelled" } });
+  });
 }

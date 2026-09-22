@@ -24,7 +24,7 @@ inventoryRouter.get(
     if (search) {
       where.OR = [
         { sku: { contains: search, mode: "insensitive" } },
-        { product: { name: { contains: search, mode: "insensitive" } } },
+        { variant: { product: { name: { contains: search, mode: "insensitive" } } } },
       ];
     }
 
@@ -32,7 +32,16 @@ inventoryRouter.get(
     const [rows, total] = await Promise.all([
       prisma.garmentUnit.findMany({
         where,
-        include: { product: { select: { id: true, name: true, brand: true } }, currentOrder: { select: { id: true } } },
+        include: {
+          variant: {
+            select: {
+              id: true,
+              color: true,
+              product: { select: { id: true, name: true, brand: true, category: { select: { name: true } } } },
+            },
+          },
+          currentOrder: { select: { id: true, customer: { select: { name: true } } } },
+        },
         orderBy: { lastMovedAt: "desc" },
         skip,
         take,
@@ -45,13 +54,19 @@ inventoryRouter.get(
         rows.map((u) => ({
           id: u.id,
           sku: u.sku,
-          product: u.product,
+          productId: u.variant.product.id,
+          variantId: u.variantId,
+          name: u.variant.product.name,
+          brand: u.variant.product.brand,
+          category: u.variant.product.category.name,
+          color: u.variant.color,
           size: u.size,
           stage: u.stage,
           condition: u.condition,
           lastMovedAt: u.lastMovedAt,
           timesRented: u.timesRented,
           currentOrderId: u.currentOrderId,
+          currentCustomerName: u.currentOrder?.customer?.name ?? null,
           facilityId: u.facilityId,
         })),
         total,
@@ -67,13 +82,35 @@ inventoryRouter.get(
     const unit = await prisma.garmentUnit.findUnique({
       where: { id: req.params.id },
       include: {
-        product: true,
+        variant: { include: { product: { include: { category: true } } } },
         currentOrder: { select: { id: true, status: true, customer: { select: { name: true } } } },
         stageTransitions: { orderBy: { occurredAt: "desc" }, take: 20 },
       },
     });
     if (!unit) throw ApiError.notFound("Garment unit not found");
-    res.json(unit);
+
+    // Flattened the same way as the list endpoint above (variant.product ->
+    // top-level productId/name/brand/category/color) so the admin panel's
+    // detail view and list view share one adapter shape.
+    res.json({
+      id: unit.id,
+      sku: unit.sku,
+      productId: unit.variant.product.id,
+      variantId: unit.variantId,
+      name: unit.variant.product.name,
+      brand: unit.variant.product.brand,
+      category: unit.variant.product.category.name,
+      color: unit.variant.color,
+      size: unit.size,
+      stage: unit.stage,
+      condition: unit.condition,
+      lastMovedAt: unit.lastMovedAt,
+      timesRented: unit.timesRented,
+      currentOrderId: unit.currentOrderId,
+      currentOrder: unit.currentOrder,
+      facilityId: unit.facilityId,
+      stageTransitions: unit.stageTransitions,
+    });
   })
 );
 

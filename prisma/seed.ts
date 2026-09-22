@@ -46,6 +46,18 @@ async function main() {
     create: { id: "seed-courier-1", name: "Ravi Kumar", zones: ["Indiranagar", "Koramangala"] },
   });
 
+  const blazersCategory = await prisma.category.upsert({
+    where: { name: "Blazers" },
+    update: {},
+    create: { id: "seed-category-blazers", name: "Blazers", slug: "blazers" },
+  });
+
+  const gownsCategory = await prisma.category.upsert({
+    where: { name: "Gowns" },
+    update: {},
+    create: { id: "seed-category-gowns", name: "Gowns", slug: "gowns" },
+  });
+
   const blazer = await prisma.product.upsert({
     where: { id: "seed-product-blazer" },
     update: {},
@@ -53,11 +65,9 @@ async function main() {
       id: "seed-product-blazer",
       name: "Midnight Linen Blazer",
       brand: "Vestige",
-      category: "Blazers",
+      categoryId: blazersCategory.id,
       occasions: ["Office", "DateNight"],
       styles: ["Formal", "Minimal"],
-      color: "Midnight Navy",
-      colorHex: "#1B2340",
       rentPricePaise: 149900,
       rentDays: 4,
       buyPricePaise: 649900,
@@ -69,8 +79,20 @@ async function main() {
         { label: "Chest", value: "40in" },
         { label: "Length", value: "28in" },
       ],
+    },
+  });
+
+  const blazerNavyVariant = await prisma.productVariant.upsert({
+    where: { productId_color: { productId: blazer.id, color: "Midnight Navy" } },
+    update: {},
+    create: {
+      id: "seed-variant-blazer-navy",
+      productId: blazer.id,
+      color: "Midnight Navy",
+      colorHex: "#1B2340",
       views: ["front", "back", "fabric"],
       imageUrls: { front: "https://example.com/blazer-front.jpg" },
+      sizes: { create: [{ size: "M" }, { size: "L" }] },
     },
   });
 
@@ -81,11 +103,9 @@ async function main() {
       id: "seed-product-gown",
       name: "Emerald Silk Gown",
       brand: "Vestige",
-      category: "Gowns",
+      categoryId: gownsCategory.id,
       occasions: ["Wedding", "Party"],
       styles: ["Classic", "Contemporary"],
-      color: "Emerald",
-      colorHex: "#0B6E4F",
       rentPricePaise: 249900,
       rentDays: 3,
       buyPricePaise: 1249900,
@@ -94,24 +114,36 @@ async function main() {
       fabric: "Silk",
       care: ["Dry clean only"],
       measurements: [{ label: "Bust", value: "36in" }],
-      views: ["front", "back", "model"],
-      imageUrls: { front: "https://example.com/gown-front.jpg" },
     },
   });
 
-  const units: { productId: string; size: string; sku: string }[] = [
-    { productId: blazer.id, size: "M", sku: "BLZ-M-001" },
-    { productId: blazer.id, size: "M", sku: "BLZ-M-002" },
-    { productId: blazer.id, size: "L", sku: "BLZ-L-001" },
-    { productId: gown.id, size: "S", sku: "GWN-S-001" },
-    { productId: gown.id, size: "M", sku: "GWN-M-001" },
+  const gownEmeraldVariant = await prisma.productVariant.upsert({
+    where: { productId_color: { productId: gown.id, color: "Emerald" } },
+    update: {},
+    create: {
+      id: "seed-variant-gown-emerald",
+      productId: gown.id,
+      color: "Emerald",
+      colorHex: "#0B6E4F",
+      views: ["front", "back", "model"],
+      imageUrls: { front: "https://example.com/gown-front.jpg" },
+      sizes: { create: [{ size: "S" }, { size: "M" }] },
+    },
+  });
+
+  const units: { variantId: string; size: string; sku: string }[] = [
+    { variantId: blazerNavyVariant.id, size: "M", sku: "BLZ-M-001" },
+    { variantId: blazerNavyVariant.id, size: "M", sku: "BLZ-M-002" },
+    { variantId: blazerNavyVariant.id, size: "L", sku: "BLZ-L-001" },
+    { variantId: gownEmeraldVariant.id, size: "S", sku: "GWN-S-001" },
+    { variantId: gownEmeraldVariant.id, size: "M", sku: "GWN-M-001" },
   ];
 
   for (const u of units) {
     await prisma.garmentUnit.upsert({
       where: { sku: u.sku },
       update: {},
-      create: { sku: u.sku, productId: u.productId, size: u.size, facilityId: facility.id },
+      create: { sku: u.sku, variantId: u.variantId, size: u.size, facilityId: facility.id },
     });
   }
 

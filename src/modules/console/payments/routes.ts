@@ -30,14 +30,36 @@ consolePaymentsRouter.get(
     const [rows, total] = await Promise.all([
       prisma.payment.findMany({
         where,
-        include: { customer: { select: { id: true, name: true } }, order: { select: { id: true } } },
+        include: { customer: { select: { id: true, name: true } } },
         orderBy: { createdAt: "desc" },
         skip,
         take,
       }),
       prisma.payment.count({ where }),
     ]);
-    res.json(paginatedResponse(rows, total, { page, pageSize }));
+    res.json(
+      paginatedResponse(
+        rows.map((p) => ({
+          id: p.id,
+          orderId: p.orderId,
+          customerId: p.customerId,
+          amountPaise: p.amountPaise,
+          chargedAmountMinor: p.chargedAmountMinor,
+          chargedCurrency: p.chargedCurrency,
+          method: p.method,
+          status: p.status,
+          gateway: p.gateway,
+          gatewayRef: p.gatewayRef,
+          gatewayPaymentRef: p.gatewayPaymentRef,
+          idempotencyKey: p.idempotencyKey,
+          createdAt: p.createdAt,
+          customer: { id: p.customer.id, name: p.customer.name },
+          order: { id: p.orderId },
+        })),
+        total,
+        { page, pageSize }
+      )
+    );
   })
 );
 

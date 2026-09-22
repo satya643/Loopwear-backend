@@ -1,4 +1,5 @@
 import { prisma } from "../../../lib/prisma";
+import { ApiError } from "../../../lib/errors";
 import { BUSINESS_RULES } from "../../../config/business";
 import { paginatedResponse, toSkipTake, type Pagination } from "../../../lib/pagination";
 
@@ -29,16 +30,17 @@ export async function listCustomers(filters: { q?: string }, pagination: Paginat
     prisma.user.count({ where }),
   ]);
 
-  const items = await Promise.all(users.map((u) => buildCustomerSummary(u.id, u.name, u.email)));
+  const items = await Promise.all(users.map((u) => buildCustomerSummary(u.id, u.name, u.email, u.createdAt)));
   return paginatedResponse(items, total, pagination);
 }
 
 export async function getCustomer(userId: string) {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  return buildCustomerSummary(user.id, user.name, user.email);
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw ApiError.notFound("Customer not found");
+  return buildCustomerSummary(user.id, user.name, user.email, user.createdAt);
 }
 
-async function buildCustomerSummary(userId: string, name: string, email: string) {
+async function buildCustomerSummary(userId: string, name: string, email: string, memberSince: Date) {
   const rentItems = await prisma.orderItem.findMany({
     where: { mode: "rent", order: { customerId: userId, status: { not: "cancelled" } } },
     select: { rentReturnDate: true, actualReturnDate: true },
@@ -53,6 +55,7 @@ async function buildCustomerSummary(userId: string, name: string, email: string)
     id: userId,
     name,
     email,
+    memberSince,
     totalRentals,
     onTimeRate: Math.round(onTimeRate * 100) / 100,
     tier: computeTier(totalRentals, onTimeRate),

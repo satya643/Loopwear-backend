@@ -21,12 +21,16 @@ function serializeOrder(order: any) {
     status: order.status,
     statusLabel: ORDER_STATUS_LABELS[order.status] ?? order.status,
     customer: order.customer ? { id: order.customer.id, name: order.customer.name, email: order.customer.email } : undefined,
+    customerName: order.customer?.name,
+    garmentNames: order.items?.map((item: any) => item.product?.name).filter(Boolean),
     placedAt: order.placedAt,
     eventDate: order.eventDate,
     city: order.city,
     totalPaise: order.totalPaise,
     depositTotalPaise: order.depositTotalPaise,
     currency: order.currency,
+    payments: order.payments,
+    deliveryJobs: order.deliveryJobs,
     items: order.items,
   };
 }
@@ -46,7 +50,10 @@ export async function listOrders(filters: { status?: string; q?: string }, pagin
   const [rows, total] = await Promise.all([
     prisma.order.findMany({
       where,
-      include: { customer: { select: { id: true, name: true, email: true } } },
+      include: {
+        customer: { select: { id: true, name: true, email: true } },
+        items: { include: { product: { select: { name: true } } } },
+      },
       orderBy: { placedAt: "desc" },
       skip,
       take,

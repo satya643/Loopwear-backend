@@ -212,15 +212,28 @@ model OtpCode {
 // See build spec §2: a Product is a design, a GarmentUnit is one physical item.
 // ---------------------------------------------------------------------------
 
+// Single source of truth for categories — the admin panel's dropdown and
+// the shop's category navigation both read this same table (never two
+// separate lists to keep in sync). Managed via the console, not hardcoded.
+model Category {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  slug      String    @unique
+  isActive  Boolean   @default(true)
+  sortOrder Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  products  Product[]
+}
+
 model Product {
   id              String        @id @default(uuid())
   name            String
   brand           String
-  category        String
+  categoryId      String
+  category        Category      @relation(fields: [categoryId], references: [id])
   occasions       Occasion[]
   styles          StyleTag[]
-  color           String
-  colorHex        String
   rentPricePaise  Int
   rentDays        Int
   buyPricePaise   Int
@@ -229,20 +242,68 @@ model Product {
   fabric          String
   care            String[]
   measurements    Json
-  views           ProductView[]
-  imageUrls       Json
+  // Free-text product write-up (the shop's "details" copy) — separate from
+  // `fabric`/`care`/`measurements`, which are each their own structured
+  // field. Empty string, not null, so every consumer can render it directly.
+  description     String        @default("")
+  // One admin-uploaded thumbnail shown on cards/cart lines before any color
+  // is picked (or when a color has no photo of its own yet) — see
+  // ProductVariant.imageUrls for the per-color photos that take priority
+  // over this once a customer selects a color.
+  coverImageUrl   String?
+  // Per-product condition/quality blurb shown on the PDP — was a single
+  // hardcoded string for every product ("Excellent condition, inspected
+  // before dispatch"); now admin-settable, defaulting to that same copy so
+  // existing products render unchanged until an admin customizes it.
+  conditionCopy   String        @default("Excellent condition, inspected before dispatch")
   isActive        Boolean       @default(true)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
-  garmentUnits    GarmentUnit[]
+  variants        ProductVariant[]
   reviews         Review[]
   outfitProducts  OutfitProduct[]
   cartItems       CartItem[]
   wishlistItems   WishlistItem[]
   orderItems      OrderItem[]
 
-  @@index([category])
+  @@index([categoryId])
+}
+
+// One row per color a Product comes in. Product = the design ("Premium
+// Linen Shirt"); ProductVariant = one color of it ("Black"); GarmentUnit =
+// one physical item of a (variant, size). Color/colorHex/images/views moved
+// here from Product — a product with 3 colors is one Product row with 3
+// ProductVariant rows, never 3 separate Products.
+model ProductVariant {
+  id         String        @id @default(uuid())
+  productId  String
+  product    Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  color      String
+  colorHex   String
+  views      ProductView[]
+  imageUrls  Json          @default("{}")
+  isActive   Boolean       @default(true)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  sizes        VariantSize[]
+  garmentUnits GarmentUnit[]
+
+  @@unique([productId, color])
+}
+
+// Declares which sizes a variant is offered in — catalog metadata for the
+// admin's size checkboxes, not a stock count. Real stock is always
+// `count(GarmentUnit where variantId=X, size=Y, stage=available)`; a
+// separate counter here would just drift out of sync with it.
+model VariantSize {
+  id        String         @id @default(uuid())
+  variantId String
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  size      String
+
+  @@unique([variantId, size])
 }
 
 model Review {
@@ -269,8 +330,8 @@ model Facility {
 model GarmentUnit {
   id              String        @id @default(uuid())
   sku             String        @unique
-  productId       String
-  product         Product       @relation(fields: [productId], references: [id])
+  variantId       String
+  variant         ProductVariant @relation(fields: [variantId], references: [id])
   size            String
   stage           GarmentStage  @default(available)
   condition       Condition     @default(excellent)
@@ -286,7 +347,7 @@ model GarmentUnit {
   batchItems       BatchItem[]
   orderItems       OrderItem[]
 
-  @@index([productId, size, stage])
+  @@index([variantId, size, stage])
   @@index([stage])
 }
 
@@ -323,6 +384,20 @@ model OutfitProduct {
   position  Int     @default(0)
 
   @@id([outfitId, productId])
+}
+
+// The admin-uploaded cover image + blurb for one occasion's tile on the
+// shop's "Shop by Occasion" home section (see console/occasionTiles and
+// catalog's getOccasionsWithCounts). One row per Occasion at most — not a
+// generic list an admin builds, so `occasion` is the primary key rather
+// than a separate uuid + unique constraint. No row yet for a given occasion
+// means the admin hasn't set an image for it, and the shop hides that tile
+// rather than falling back to placeholder/stock imagery.
+model OccasionTile {
+  occasion  Occasion @id
+  imageUrl  String
+  blurb     String
+  updatedAt DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------------------

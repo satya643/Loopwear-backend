@@ -4,6 +4,7 @@ import { asyncHandler } from "../../../lib/asyncHandler";
 import { requireAuth } from "../../../middleware/auth";
 import { requireRole } from "../../../middleware/rbac";
 import { validateBody, validateQuery } from "../../../middleware/validate";
+import { ApiError } from "../../../lib/errors";
 import * as deliveryService from "./service";
 
 export const consoleDeliveryRouter = Router();
@@ -19,6 +20,28 @@ consoleDeliveryRouter.get(
   validateQuery(listQuerySchema),
   asyncHandler(async (req, res) => {
     res.json({ items: await deliveryService.listDeliveryJobs(req.query as never) });
+  })
+);
+
+const createJobSchema = z.object({
+  orderId: z.string().min(1),
+  type: z.enum(["pickup", "dropoff"]),
+  windowStart: z.string().refine((v) => !Number.isNaN(Date.parse(v)), "invalid windowStart"),
+  windowEnd: z.string().refine((v) => !Number.isNaN(Date.parse(v)), "invalid windowEnd"),
+  zone: z.string().min(1),
+});
+
+consoleDeliveryRouter.post(
+  "/",
+  validateBody(createJobSchema),
+  asyncHandler(async (req, res) => {
+    const { orderId, type, windowStart, windowEnd, zone } = req.body;
+    const start = new Date(windowStart);
+    const end = new Date(windowEnd);
+    if (end <= start) throw ApiError.badRequest("windowEnd must be after windowStart");
+
+    const job = await deliveryService.createDeliveryJob({ orderId, type, windowStart: start, windowEnd: end, zone });
+    res.status(201).json(job);
   })
 );
 

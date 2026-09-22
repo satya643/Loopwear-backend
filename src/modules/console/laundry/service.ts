@@ -14,6 +14,7 @@ function serializeBatch(batch: any) {
   return {
     id: batch.id,
     facilityId: batch.facilityId,
+    facility: batch.facility?.name,
     stage: batch.stage,
     priority: batch.priority,
     startedAt: batch.startedAt,
@@ -28,7 +29,7 @@ function serializeBatch(batch: any) {
 
 export async function listBatches() {
   const batches = await prisma.laundryBatch.findMany({
-    include: { _count: { select: { items: true } } },
+    include: { _count: { select: { items: true } }, facility: { select: { name: true } } },
     orderBy: { startedAt: "desc" },
   });
   return batches.map(serializeBatch);
@@ -53,7 +54,7 @@ export async function createBatch(input: { facilityId: string; garmentUnitIds: s
       estimatedCompleteAt: new Date(Date.now() + estimateMinutesFor(input.priority) * 60 * 1000),
       items: { createMany: { data: input.garmentUnitIds.map((garmentUnitId) => ({ garmentUnitId })) } },
     },
-    include: { _count: { select: { items: true } } },
+    include: { _count: { select: { items: true } }, facility: { select: { name: true } } },
   });
   return serializeBatch(batch);
 }
@@ -78,7 +79,7 @@ export async function advanceBatch(batchId: string, actorUserId: string) {
     const updated = await tx.laundryBatch.update({
       where: { id: batchId },
       data: { stage: nextStage },
-      include: { _count: { select: { items: true } } },
+      include: { _count: { select: { items: true } }, facility: { select: { name: true } } },
     });
 
     if (nextStage === "quality" || nextStage === "ready") {
