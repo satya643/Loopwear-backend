@@ -2,6 +2,7 @@ import { Router } from "express";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { validateBody } from "../../middleware/validate";
 import { requireAuth } from "../../middleware/auth";
+import { authRateLimiter } from "../../middleware/rateLimit";
 import {
   signUpSchema,
   verifyOtpSchema,
@@ -22,6 +23,7 @@ function meta(req: import("express").Request) {
 
 authRouter.post(
   "/sign-up",
+  authRateLimiter,
   validateBody(signUpSchema),
   asyncHandler(async (req, res) => {
     const result = await authService.signUp(req.body);
@@ -31,6 +33,7 @@ authRouter.post(
 
 authRouter.post(
   "/verify-otp",
+  authRateLimiter,
   validateBody(verifyOtpSchema),
   asyncHandler(async (req, res) => {
     const result = await authService.verifyOtp(req.body.phone, req.body.code, meta(req));
@@ -40,6 +43,7 @@ authRouter.post(
 
 authRouter.post(
   "/resend-otp",
+  authRateLimiter,
   validateBody(resendOtpSchema),
   asyncHandler(async (req, res) => {
     await authService.resendOtp(req.body.phone);
@@ -49,6 +53,7 @@ authRouter.post(
 
 authRouter.post(
   "/sign-in",
+  authRateLimiter,
   validateBody(signInSchema),
   asyncHandler(async (req, res) => {
     const result = await authService.signIn(req.body.email, req.body.password, meta(req));
@@ -58,6 +63,7 @@ authRouter.post(
 
 authRouter.post(
   "/request-otp-login",
+  authRateLimiter,
   validateBody(requestOtpLoginSchema),
   asyncHandler(async (req, res) => {
     await authService.requestOtpLogin(req.body.phone);
@@ -67,6 +73,7 @@ authRouter.post(
 
 authRouter.post(
   "/google",
+  authRateLimiter,
   validateBody(continueWithGoogleSchema),
   asyncHandler(async (req, res) => {
     const result = await authService.continueWithGoogle(req.body.idToken, meta(req));

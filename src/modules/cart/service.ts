@@ -13,7 +13,10 @@ async function getOrCreateCart(userId: string) {
 async function serializeCart(cartId: string, ctx: PricingContext) {
   const items = await prisma.cartItem.findMany({
     where: { cartId },
-    include: { product: true },
+    // The cart doesn't capture which color the customer chose yet (see
+    // ProductVariant) — the first variant stands in as the product's
+    // representative image, same as today's one-color-per-product display.
+    include: { product: { include: { variants: { take: 1, orderBy: { createdAt: "asc" } } } } },
     orderBy: { addedAt: "asc" },
   });
   return {
@@ -24,7 +27,15 @@ async function serializeCart(cartId: string, ctx: PricingContext) {
         id: item.product.id,
         name: item.product.name,
         brand: item.product.brand,
-        imageUrls: item.product.imageUrls,
+        colorHex: item.product.variants[0]?.colorHex ?? "#172b4d",
+        // Falls back to the product's admin-uploaded cover image when its
+        // first color has no photo of its own yet (see Product.coverImageUrl).
+        imageUrls:
+          Object.keys(item.product.variants[0]?.imageUrls ?? {}).length > 0
+            ? (item.product.variants[0]!.imageUrls as Record<string, string>)
+            : item.product.coverImageUrl
+              ? { front: item.product.coverImageUrl }
+              : {},
       },
       mode: item.mode,
       size: item.size,

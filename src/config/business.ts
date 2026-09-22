@@ -49,6 +49,10 @@ export const BUSINESS_RULES = {
    * units stayed `reserved` forever, invisible/unbookable to everyone else.
    * jobs/releaseStalePendingOrders.ts cancels orders past this age with no
    * paid payment and releases their units back to `available`.
+   *
+   * NOTE: overlaps with checkoutHoldMinutes / releaseAbandonedReservations.ts
+   * below — two independent implementations of the same release job landed
+   * from different branches during a merge. Needs consolidating.
    */
   pendingPaymentReleaseMinutes: 60,
 
@@ -63,4 +67,19 @@ export const BUSINESS_RULES = {
    * a real gap once there's more than one.
    */
   defaultDeliveryWindowDays: 2,
+
+  /**
+   * Checkout reserves a physical unit for every cart line the instant an
+   * order is created — necessarily, since inventory has to be locked before
+   * the customer even reaches the payment screen (see
+   * modules/checkout/service.ts). If they never complete payment (widget
+   * closed, card declined, tab abandoned), that reservation used to hold
+   * the unit forever — a `pending_payment` order older than this many
+   * minutes is treated as abandoned and released (see
+   * jobs/releaseAbandonedReservations.ts): the unit goes back to
+   * `available`, its order to `cancelled`, its payment (if any) to
+   * `failed`. 30 minutes is a common checkout-hold window for this kind of
+   * store; tune freely.
+   */
+  checkoutHoldMinutes: 30,
 };

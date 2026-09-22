@@ -1,4 +1,5 @@
 import { prisma } from "../../../lib/prisma";
+import { ApiError } from "../../../lib/errors";
 import { BUSINESS_RULES } from "../../../config/business";
 import { paginatedResponse, toSkipTake, type Pagination } from "../../../lib/pagination";
 
@@ -70,7 +71,9 @@ export async function listCustomers(filters: { q?: string }, pagination: Paginat
 }
 
 export async function getCustomer(userId: string) {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw ApiError.notFound("Customer not found");
+
   const rentItems = await prisma.orderItem.findMany({
     where: { mode: "rent", order: { customerId: userId, status: { not: "cancelled" } } },
     select: { rentReturnDate: true, actualReturnDate: true },

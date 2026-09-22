@@ -50,6 +50,29 @@ export async function listDeliveryJobs(filters: { status?: string; type?: string
   return paginatedResponse(serialized.slice(skip, skip + take), total, pagination);
 }
 
+export async function createDeliveryJob(input: {
+  orderId: string;
+  type: "pickup" | "dropoff";
+  windowStart: Date;
+  windowEnd: Date;
+  zone: string;
+}) {
+  const order = await prisma.order.findUnique({ where: { id: input.orderId } });
+  if (!order) throw ApiError.notFound("Order not found");
+
+  const job = await prisma.deliveryJob.create({
+    data: {
+      orderId: input.orderId,
+      type: input.type,
+      windowStart: input.windowStart,
+      windowEnd: input.windowEnd,
+      zone: input.zone,
+    },
+    include: { order: { include: { customer: { select: { name: true } } } }, courier: true },
+  });
+  return serialize(job);
+}
+
 export async function reassignCourier(jobId: string, courierId: string) {
   const job = await prisma.deliveryJob.findUnique({ where: { id: jobId } });
   if (!job) throw ApiError.notFound("Delivery job not found");

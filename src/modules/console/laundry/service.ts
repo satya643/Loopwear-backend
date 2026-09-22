@@ -32,7 +32,7 @@ export async function listBatches(pagination: Pagination) {
   const { skip, take } = toSkipTake(pagination);
   const [batches, total] = await Promise.all([
     prisma.laundryBatch.findMany({
-      include: { _count: { select: { items: true } }, facility: true },
+      include: { _count: { select: { items: true } }, facility: { select: { name: true } } },
       orderBy: { startedAt: "desc" },
       skip,
       take,
@@ -61,7 +61,7 @@ export async function createBatch(input: { facilityId: string; garmentUnitIds: s
       estimatedCompleteAt: new Date(Date.now() + estimateMinutesFor(input.priority) * 60 * 1000),
       items: { createMany: { data: input.garmentUnitIds.map((garmentUnitId) => ({ garmentUnitId })) } },
     },
-    include: { _count: { select: { items: true } }, facility: true },
+    include: { _count: { select: { items: true } }, facility: { select: { name: true } } },
   });
   return serializeBatch(batch);
 }
@@ -86,7 +86,7 @@ export async function advanceBatch(batchId: string, actorUserId: string) {
     const updated = await tx.laundryBatch.update({
       where: { id: batchId },
       data: { stage: nextStage },
-      include: { _count: { select: { items: true } }, facility: true },
+      include: { _count: { select: { items: true } }, facility: { select: { name: true } } },
     });
 
     if (nextStage === "quality" || nextStage === "ready") {

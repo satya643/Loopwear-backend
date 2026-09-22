@@ -42,6 +42,8 @@ function serializeOrder(order: any) {
     totalPaise: order.totalPaise,
     depositTotalPaise: order.depositTotalPaise,
     currency: order.currency,
+    payments: order.payments,
+    deliveryJobs: order.deliveryJobs,
     items: order.items,
   };
 }

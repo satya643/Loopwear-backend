@@ -33,7 +33,7 @@ async function allocateUnitForLine(
 ): Promise<AllocationResult> {
   const candidateIds =
     mode === "buy"
-      ? (await tx.garmentUnit.findMany({ where: { productId, size, stage: "available" }, select: { id: true } })).map(
+      ? (await tx.garmentUnit.findMany({ where: { variant: { productId }, size, stage: "available" }, select: { id: true } })).map(
           (u) => u.id
         )
       : await findFreeUnitIds(tx, productId, size, start, end);
@@ -206,58 +206,80 @@ async function buildCheckoutResponse(orderId: string) {
   const chargeCurrency = order.currency;
   const chargedAmountMinor = convertPaise(order.totalPaise + order.depositTotalPaise, order.fxRateToBase);
 
-<<<<<<< HEAD
-  let intent: Awaited<ReturnType<typeof createPaymentIntent>>;
-  try {
-    intent = await createPaymentIntent(chargedAmountMinor, chargeCurrency, { orderId });
-  } catch {
-    // The order — and its inventory reservation — is already committed by
-    // this point. A failed payment-intent call is a gateway/config problem,
-    // not a reason to make the order vanish from the caller's view with a
-    // bare 500; surface it as a distinct, retryable error carrying the
-    // order id so the client can point the customer at their order instead.
-    throw ApiError.badGateway(
-      "Your order was placed, but we couldn't start payment. Please retry payment for this order.",
-      { orderId }
-    );
-  }
-=======
   // Razorpay is INR-first (UPI/cards/netbanking for Indian customers);
   // non-INR orders fall back to Stripe. Pick whichever gateway is actually
   // configured for this currency so checkout doesn't 500 on a missing key.
   const useRazorpay = chargeCurrency === "INR" && Boolean(env.razorpay.keyId && env.razorpay.keySecret);
 
-  if (useRazorpay) {
-    const rpOrder = await createRazorpayOrder(chargedAmountMinor, chargeCurrency, orderId);
-
-    const payment = await prisma.payment.create({
-      data: {
-        orderId,
-        customerId: order.customerId,
-        amountPaise: order.totalPaise + order.depositTotalPaise,
-        chargedAmountMinor,
-        chargedCurrency: chargeCurrency,
-        method: "card",
-        gateway: "razorpay",
-        gatewayRef: rpOrder.id,
-      },
-    });
-
-    return {
-      order,
-      payment: {
-        id: payment.id,
-        status: payment.status,
-        razorpayOrderId: rpOrder.id,
-        razorpayKeyId: env.razorpay.keyId,
-        amount: chargedAmountMinor,
-        currency: chargeCurrency,
-      },
-    };
+  // A concurrent call for the same order (client retry racing the original
+  // request) can pass the `existingPayment` check above before either insert
+  // lands; the loser hits the DB's partial unique index on Payment(orderId)
+  // WHERE status IN (pending,paid) here. Replay the winner's payment instead
+  // of a raw 500 — its now-orphaned gateway intent/order is simply never
+  // confirmed/used, which is harmless.
+  async function replayConcurrentWinner(err: unknown) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      const winner = await prisma.payment.findFirst({ where: { orderId, status: { in: ["pending", "paid"] } } });
+      if (winner) return { order, payment: { id: winner.id, status: winner.status } };
+    }
+    throw err;
   }
 
-  const intent = await createPaymentIntent(chargedAmountMinor, chargeCurrency, { orderId });
->>>>>>> f1cbbb76d6a3d2f82b1f885e0a3fe3e335d76053
+  if (useRazorpay) {
+    let rpOrder: Awaited<ReturnType<typeof createRazorpayOrder>>;
+    try {
+      rpOrder = await createRazorpayOrder(chargedAmountMinor, chargeCurrency, orderId);
+    } catch {
+      // The order — and its inventory reservation — is already committed by
+      // this point. A failed payment-intent call is a gateway/config problem,
+      // not a reason to make the order vanish from the caller's view with a
+      // bare 500; surface it as a distinct, retryable error carrying the
+      // order id so the client can point the customer at their order instead.
+      throw ApiError.badGateway(
+        "Your order was placed, but we couldn't start payment. Please retry payment for this order.",
+        { orderId }
+      );
+    }
+
+    try {
+      const payment = await prisma.payment.create({
+        data: {
+          orderId,
+          customerId: order.customerId,
+          amountPaise: order.totalPaise + order.depositTotalPaise,
+          chargedAmountMinor,
+          chargedCurrency: chargeCurrency,
+          method: "card",
+          gateway: "razorpay",
+          gatewayRef: rpOrder.id,
+        },
+      });
+
+      return {
+        order,
+        payment: {
+          id: payment.id,
+          status: payment.status,
+          razorpayOrderId: rpOrder.id,
+          razorpayKeyId: env.razorpay.keyId,
+          amount: chargedAmountMinor,
+          currency: chargeCurrency,
+        },
+      };
+    } catch (err) {
+      return replayConcurrentWinner(err);
+    }
+  }
+
+  let intent: Awaited<ReturnType<typeof createPaymentIntent>>;
+  try {
+    intent = await createPaymentIntent(chargedAmountMinor, chargeCurrency, { orderId });
+  } catch {
+    throw ApiError.badGateway(
+      "Your order was placed, but we couldn't start payment. Please retry payment for this order.",
+      { orderId }
+    );
+  }
 
   try {
     const payment = await prisma.payment.create({
@@ -278,16 +300,41 @@ async function buildCheckoutResponse(orderId: string) {
       payment: { id: payment.id, status: payment.status, clientSecret: intent.client_secret },
     };
   } catch (err) {
-    // A concurrent call for the same order (client retry racing the
-    // original request) can pass the `existingPayment` check above before
-    // either insert lands; the loser hits the DB's partial unique index on
-    // Payment(orderId) WHERE status IN (pending,paid) here. Replay the
-    // winner's payment instead of a raw 500 — its now-orphaned Stripe
-    // PaymentIntent is simply never confirmed/used, which is harmless.
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      const winner = await prisma.payment.findFirst({ where: { orderId, status: { in: ["pending", "paid"] } } });
-      if (winner) return { order, payment: { id: winner.id, status: winner.status } };
-    }
-    throw err;
+    return replayConcurrentWinner(err);
   }
+}
+
+/**
+ * Undoes exactly what allocateUnitForLine did: every unit this order was
+ * holding goes back to `available` (never back to its pre-checkout stage —
+ * checkout only ever reserves units that were already `available`, per
+ * allocateUnitForLine's own candidate query), the order moves to
+ * `cancelled`, and any non-paid payment attached to it to `failed`.
+ * Idempotent — safe to call on an order that's already been moved on for
+ * any reason (skips it rather than erroring), so both the abandoned-
+ * reservation job and an explicit gateway-failure callback can call this
+ * without coordinating with each other.
+ */
+export async function releaseAbandonedOrder(orderId: string, reason: string) {
+  await prisma.$transaction(async (tx) => {
+    const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order || order.status !== "pending_payment") return;
+
+    for (const item of order.items) {
+      if (!item.garmentUnitId) continue;
+      const unit = await tx.garmentUnit.findUnique({ where: { id: item.garmentUnitId } });
+      if (!unit || unit.currentOrderId !== orderId) continue;
+
+      await tx.garmentUnit.update({
+        where: { id: unit.id },
+        data: { stage: "available", currentOrderId: null, lastMovedAt: new Date() },
+      });
+      await tx.stageTransition.create({
+        data: { garmentUnitId: unit.id, fromStage: unit.stage, toStage: "available", note: reason },
+      });
+    }
+
+    await tx.payment.updateMany({ where: { orderId, status: { not: "paid" } }, data: { status: "failed" } });
+    await tx.order.update({ where: { id: orderId }, data: { status: "cancelled" } });
+  });
 }

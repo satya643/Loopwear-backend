@@ -22,6 +22,11 @@ type Client = PrismaClient | Prisma.TransactionClient;
  * Accepts either the default client or a transaction client so checkout can
  * re-run this exact check inside the allocation transaction (see
  * modules/checkout/service.ts) without duplicating the overlap logic.
+ *
+ * NOTE: this still allocates by (productId, size) across ALL of the
+ * product's colors — fine while the storefront doesn't let a customer pick
+ * a color, but once it does (see ProductVariant), this needs a variantId
+ * param instead so a "White, M" request can't be satisfied by a Black unit.
  */
 export async function findFreeUnitIds(
   client: Client,
@@ -31,7 +36,7 @@ export async function findFreeUnitIds(
   end: Date
 ): Promise<string[]> {
   const units = await client.garmentUnit.findMany({
-    where: { productId, size, stage: { notIn: ["retired", "sold"] } },
+    where: { variant: { productId }, size, stage: { notIn: ["retired", "sold"] } },
     select: { id: true },
   });
   if (units.length === 0) return [];
@@ -74,7 +79,7 @@ export async function getSizeAvailability(productId: string, start: Date, end: D
   if (end <= start) throw ApiError.badRequest("end date must be after start date");
 
   const sizes = await prisma.garmentUnit.findMany({
-    where: { productId, stage: { notIn: ["retired", "sold"] } },
+    where: { variant: { productId }, stage: { notIn: ["retired", "sold"] } },
     distinct: ["size"],
     select: { size: true },
   });

@@ -13,7 +13,9 @@ wishlistRouter.get(
   asyncHandler(async (req, res) => {
     const items = await prisma.wishlistItem.findMany({
       where: { userId: req.auth!.userId },
-      include: { product: true },
+      // Wishlist doesn't capture a color choice (see ProductVariant) — the
+      // first variant stands in as the product's representative image.
+      include: { product: { include: { variants: { take: 1, orderBy: { createdAt: "asc" } } } } },
       orderBy: { addedAt: "desc" },
     });
     res.json({
@@ -24,7 +26,12 @@ wishlistRouter.get(
           id: i.product.id,
           name: i.product.name,
           brand: i.product.brand,
-          imageUrls: i.product.imageUrls,
+          imageUrls:
+            Object.keys(i.product.variants[0]?.imageUrls ?? {}).length > 0
+              ? (i.product.variants[0]!.imageUrls as Record<string, string>)
+              : i.product.coverImageUrl
+                ? { front: i.product.coverImageUrl }
+                : {},
           pricing: presentPricing(
             { rentPricePaise: i.product.rentPricePaise, buyPricePaise: i.product.buyPricePaise },
             { currency: req.currency, fxRate: req.fxRate }

@@ -2,6 +2,7 @@ import { prisma } from "../../lib/prisma";
 import { ApiError } from "../../lib/errors";
 import { retrievePaymentIntent, createRefund } from "./stripe";
 import { verifyPaymentSignature, createRazorpayRefund } from "./razorpay";
+import { releaseAbandonedOrder } from "../checkout/service";
 import { BUSINESS_RULES } from "../../config/business";
 import type { Condition, Payment, Prisma } from "@prisma/client";
 
@@ -29,7 +30,16 @@ export async function confirmPaymentIntent(paymentIntentId: string, expectedUser
 
   const intent = await retrievePaymentIntent(paymentIntentId);
   if (intent.status !== "succeeded") {
-    if (payment.status !== "failed" && ["canceled", "requires_payment_method"].includes(intent.status)) {
+    // "canceled" is Stripe's own terminal failure state — no retry on this
+    // PaymentIntent is coming, so release the unit now rather than making
+    // the customer (and whoever else wants that size) wait for the
+    // abandoned-reservation job's next run.
+    // "requires_payment_method" just means this attempt failed but the
+    // customer may still retry the same PaymentIntent — the order and its
+    // reservation stay open for that.
+    if (intent.status === "canceled") {
+      await releaseAbandonedOrder(payment.orderId, `Released — Stripe payment ${paymentIntentId} was canceled`);
+    } else if (payment.status !== "failed" && intent.status === "requires_payment_method") {
       await prisma.payment.update({ where: { id: payment.id }, data: { status: "failed" } });
     }
     throw ApiError.conflict(`Payment is not completed yet (stripe status: ${intent.status})`);
