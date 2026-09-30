@@ -83,5 +83,35 @@ export const env = {
     // scripted client could hammer /api/checkout — each call creates a real
     // Stripe PaymentIntent — or spam console list endpoints, unthrottled).
     maxGeneralRequests: optionalInt("RATE_LIMIT_MAX_GENERAL_REQUESTS", 300),
+    maxCheckoutRequests: optionalInt("RATE_LIMIT_MAX_CHECKOUT_REQUESTS", 30),
+  },
+
+  // Express "trust proxy": how far to believe X-Forwarded-For when working
+  // out the client IP. Unset/false = don't (req.ip is the direct peer, i.e.
+  // the Next.js server). Set to the number of proxy hops in front of this
+  // API (e.g. 1 when only the shop's Next.js server calls it) so the
+  // shopper's IP it forwards is used for rate limiting.
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+
+  // Comma-separated browser origins allowed by CORS. Empty = allow any
+  // (dev default). Auth is a bearer token, never a cookie, so this is
+  // defence in depth rather than CSRF protection.
+  corsOrigins: (process.env.CORS_ORIGINS ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean),
+
+  jobs: {
+    // Run the release/reconcile job inside the API process. Idempotent, so
+    // several instances running it is safe; turn off if an external
+    // scheduler runs `npm run jobs:release-reservations` instead.
+    inProcess: (process.env.RUN_JOBS_IN_PROCESS ?? (process.env.NODE_ENV === "test" ? "false" : "true")) === "true",
   },
 };
+
+function parseTrustProxy(raw: string | undefined): boolean | number | string {
+  if (!raw || raw === "false") return false;
+  if (raw === "true") return true;
+  const n = Number(raw);
+  return Number.isInteger(n) ? n : raw;
+}

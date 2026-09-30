@@ -8,7 +8,8 @@ Shop, Concourse (operator console) and Auth surfaces.
 - **Runtime**: Node 20, TypeScript, Express
 - **DB**: PostgreSQL via Prisma ORM
 - **Auth**: JWT (7-day TTL) + server-side session revocation table, email/password + phone OTP
-- **Payments**: Stripe (PaymentIntents), multi-currency
+- **Payments**: Razorpay for INR (orders, checkout signature, webhooks); Stripe (PaymentIntents) for other currencies
+- **Checkout & orders**: see **[docs/CHECKOUT_ORDER_FLOW.md](./docs/CHECKOUT_ORDER_FLOW.md)** for the full guest → purchase flow, order lifecycle and edge cases
 - **Currency**: base currency is INR (paise); display currency resolved per-request via IP geolocation (`geoip-lite`) with explicit override, converted using a cached FX rate table
 
 ## Setup
@@ -38,6 +39,15 @@ Scheduled jobs (run via your own scheduler — no scheduler infra is assumed her
 npm run jobs:daily-metrics       # nightly analytics aggregation
 npm run jobs:fx-rates            # refresh currency conversion rates
 npm run jobs:delayed-deliveries  # persist delayed-status flips (also computed live)
+npm run jobs:release-reservations # reconcile + release unpaid orders (also runs in-process every 5 min)
+```
+
+Tests:
+```bash
+npm test                          # unit tests, no database
+# integration tests hit a real, DISPOSABLE Postgres (they truncate every table):
+DATABASE_URL=$TEST_DATABASE_URL npx prisma migrate deploy
+TEST_DATABASE_URL=postgresql://…/loopwear_test npm run test:integration
 ```
 
 ## Architecture notes (mapped to the build spec)
@@ -82,7 +92,9 @@ stakeholders before relying on them in production:
 | Customer tier thresholds | signature: 10+ rentals & 90%+ on-time; member: 1+ rentals; new: 0 |
 | OTP resend cooldown / daily cap | 45s / 5 per day |
 | Guest checkout | **not allowed** — login required (decided) |
-| Payment gateway | **Stripe** (decided, for multi-currency support) |
+| Payment gateway | **Razorpay** for INR, Stripe for other display currencies |
+| Checkout hold (unpaid order keeps its stock) | 30 min, then reconciled with the gateway and released (`checkoutHoldMinutes`) |
+| Delivery methods | Standard ₹50 (3–5 days), Express ₹100 (1–2 days), India only (`BUSINESS_RULES.delivery`) |
 | Multi-facility routing | not modeled — `facilityId` is set manually / via seed, no nearest-facility logic |
 
 ## API surface
@@ -105,14 +117,24 @@ Google ID token from the frontend), `POST /logout`,
 `GET /products`, `GET /products/:id`, `GET /products/:id/availability`,
 `GET /occasions`, `GET /outfits`, `GET /outfits/:id`
 
-### Cart & wishlist (auth required)
-`GET/POST /cart`, `POST /cart/items`, `DELETE /cart/items/:productId?mode=`,
-`POST /cart/merge`, `GET /wishlist`, `PUT/DELETE /wishlist/:productId`
+### Cart, addresses, delivery (auth required)
+`GET /cart`, `POST /cart/items`, `PATCH/DELETE /cart/items/:itemId`,
+`POST/DELETE /cart/coupon`, `POST /cart/revalidate`, `POST /cart/merge`,
+`GET/POST /addresses`, `PATCH/DELETE /addresses/:id`, `POST /addresses/:id/default`,
+`GET /addresses/regions` (public), `GET /shipping/methods?addressId=|postalCode=`,
+`GET /wishlist`, `PUT/DELETE /wishlist/:productId`
 
-### Checkout & orders (auth required)
-`POST /checkout` (needs `Idempotency-Key` header), `POST /payments/confirm`,
-`POST /payments/webhook` (Stripe, unauthenticated + signature-verified),
-`GET /orders`, `GET /orders/:id`, `POST /orders/:id/cancel`
+### Checkout, orders & payments (auth required)
+`GET /checkout` (checkout gate), `POST /orders/preview`, `POST /orders` (needs
+`Idempotency-Key` + `expectedTotalPaise`), `GET /orders`, `GET /orders/:id`,
+`GET /orders/:id/status`, `POST /orders/:id/cancel`,
+`POST /payments/razorpay/order`, `POST /payments/razorpay/verify`,
+`POST /payments/razorpay/failure`, `POST /payments/confirm` (Stripe).
+Deprecated: `POST /checkout` (compatibility shim for older shop builds).
+
+### Webhooks (unauthenticated, signature-verified, raw body)
+`POST /webhooks/razorpay`, `POST /webhooks/stripe`
+(legacy paths `/payments/razorpay-webhook` and `/payments/webhook` still work)
 
 ### Console (operator/admin only)
 `GET /console/garment-units`, `GET /console/garment-units/:id`,
@@ -124,7 +146,8 @@ Google ID token from the frontend), `POST /logout`,
 `PATCH /console/delivery-jobs/:id/complete`,
 `GET /console/payments`, `POST /console/payments/order-items/:id/refund`,
 `GET /console/analytics/:metric` (`utilization|revenue|turnaround|overdue`),
-`GET /console/notifications`, `POST /console/notifications/:id/read`
+`GET /console/notifications`, `POST /console/notifications/:id/read`,
+`GET/POST /console/coupons`, `PATCH /console/coupons/:id`
 
 ## What's intentionally out of scope for this pass
 

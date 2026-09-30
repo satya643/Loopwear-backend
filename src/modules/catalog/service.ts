@@ -6,7 +6,7 @@ import { toSkipTake, paginatedResponse } from "../../lib/pagination";
 import type { PricingContext } from "../../lib/pricing";
 import { presentPricing } from "../../lib/pricing";
 import { OCCASION_LABELS, occasionCodeFromLabel } from "../../lib/enumLabels";
-import { getSizeAvailability, defaultRentalWindow } from "../availability/service";
+import { getVariantStock, defaultRentalWindow } from "../availability/service";
 
 export interface ListProductsFilters {
   occasion?: string;
@@ -32,8 +32,9 @@ async function ratingMap(productIds: string[]) {
   return map;
 }
 
+// Shoppers only ever see active colours; admin sees all via /console/products.
 const productWithRelations = Prisma.validator<Prisma.ProductDefaultArgs>()({
-  include: { category: true, variants: { include: { sizes: true }, orderBy: { createdAt: "asc" } } },
+  include: { category: true, variants: { where: { isActive: true }, include: { sizes: true }, orderBy: { createdAt: "asc" } } },
 });
 type ProductWithRelations = Prisma.ProductGetPayload<typeof productWithRelations>;
 
@@ -155,12 +156,30 @@ export async function getProductDetail(id: string, ctx: PricingContext) {
   ]);
 
   const { start, end } = defaultRentalWindow(product.rentDays);
-  const sizes = await getSizeAvailability(id, start, end);
-  const similarRatings = await ratingMap(similarRows.map((p) => p.id));
+  const [stock, similarRatings] = await Promise.all([getVariantStock(id, start, end), ratingMap(similarRows.map((p) => p.id))]);
+  const activeVariantIds = new Set(product.variants.map((v) => v.id));
+
+  // Per-colour, per-size stock for the PDP's colour → size picker. Stock is
+  // informational here; add-to-cart and order placement re-check it.
+  const variantStock = product.variants.flatMap((v) =>
+    v.sizes.map((s) => {
+      const row = stock.find((r) => r.variantId === v.id && r.size === s.size);
+      return { variantId: v.id, size: s.size, rentUnitsFree: row?.rentUnitsFree ?? 0, buyUnitsAvailable: row?.buyUnitsAvailable ?? 0 };
+    })
+  );
+  // Legacy product-level view (any active colour, rental window), for older clients.
+  const bySize = new Map<string, number>();
+  for (const row of stock) {
+    if (!activeVariantIds.has(row.variantId)) continue;
+    bySize.set(row.size, (bySize.get(row.size) ?? 0) + row.rentUnitsFree);
+  }
+  const sizes = [...bySize.entries()].map(([size, unitsFree]) => ({ size, available: unitsFree > 0, unitsFree }));
 
   return {
     ...baseSerialize(product, ctx, ratings.get(id)),
     sizes,
+    variantStock,
+    defaultRentalWindow: { start, end },
     similar: similarRows.map((p) => baseSerialize(p, ctx, similarRatings.get(p.id))),
   };
 }
@@ -184,4 +203,14 @@ export async function getOccasionsWithCounts() {
     })
   );
   return counts;
+}
+
+/** Active categories for the shop's navigation/filters — the same table the admin manages. */
+export async function listCategories() {
+  const rows = await prisma.category.findMany({
+    where: { isActive: true },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+    select: { id: true, name: true, slug: true, _count: { select: { products: { where: { isActive: true } } } } },
+  });
+  return rows.map((c) => ({ id: c.id, name: c.name, slug: c.slug, productCount: c._count.products }));
 }

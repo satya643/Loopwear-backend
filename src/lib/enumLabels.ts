@@ -29,6 +29,8 @@ export const ORDER_STATUS_LABELS: Record<string, string> = {
   return_in_transit: "return in transit",
   closed: "closed",
   cancelled: "cancelled",
+  payment_failed: "payment failed",
+  refunded: "refunded",
 };
 
 export function occasionCodeFromLabel(label: string): string | undefined {

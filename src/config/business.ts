@@ -41,22 +41,6 @@ export const BUSINESS_RULES = {
   turnaroundBufferDays: 2,
 
   /**
-   * A checkout reserves garment units and clears the cart as soon as the
-   * Order row commits — *before* payment is confirmed (see
-   * modules/checkout/service.ts). If the customer abandons checkout (closes
-   * the tab, payment never completes, no webhook fires), nothing previously
-   * released that reservation: the order sat in `pending_payment` and its
-   * units stayed `reserved` forever, invisible/unbookable to everyone else.
-   * jobs/releaseStalePendingOrders.ts cancels orders past this age with no
-   * paid payment and releases their units back to `available`.
-   *
-   * NOTE: overlaps with checkoutHoldMinutes / releaseAbandonedReservations.ts
-   * below — two independent implementations of the same release job landed
-   * from different branches during a merge. Needs consolidating.
-   */
-  pendingPaymentReleaseMinutes: 60,
-
-  /**
    * Nothing anywhere ever created a DeliveryJob row — the console's Delivery
    * board (fully built for listing/reassigning/completing jobs) was
    * permanently empty on a fresh install. A dropoff job is now auto-created
@@ -69,17 +53,58 @@ export const BUSINESS_RULES = {
   defaultDeliveryWindowDays: 2,
 
   /**
-   * Checkout reserves a physical unit for every cart line the instant an
-   * order is created — necessarily, since inventory has to be locked before
-   * the customer even reaches the payment screen (see
-   * modules/checkout/service.ts). If they never complete payment (widget
-   * closed, card declined, tab abandoned), that reservation used to hold
-   * the unit forever — a `pending_payment` order older than this many
-   * minutes is treated as abandoned and released (see
-   * jobs/releaseAbandonedReservations.ts): the unit goes back to
-   * `available`, its order to `cancelled`, its payment (if any) to
-   * `failed`. 30 minutes is a common checkout-hold window for this kind of
-   * store; tune freely.
+   * Placing an order reserves a physical unit per item before the customer
+   * reaches the payment screen (modules/orders/placement.ts) — inventory
+   * has to be locked before money is taken. The order stays payable (the
+   * customer can retry a failed payment) until `paymentExpiresAt`, this many
+   * minutes after placement. After that jobs/releaseAbandonedReservations.ts
+   * first asks the gateway whether it was actually paid, and only then
+   * releases the units and closes the order. The cart is never touched
+   * until payment is confirmed.
    */
   checkoutHoldMinutes: 30,
+
+  /** How often the in-process scheduler runs the release/reconcile job. */
+  releaseJobIntervalMinutes: 5,
+
+  cart: {
+    maxQuantityPerLine: 5,
+    maxLines: 20,
+  },
+
+  /**
+   * Delivery methods offered at checkout. Config rather than a table until
+   * ops needs to edit them from the console. Fees are base-currency paise.
+   * `pincodePrefixes: null` means the method is offered at every
+   * serviceable PIN code; a list restricts it (e.g. express to metros).
+   * `freeAboveSubtotalPaise` waives the fee once the discounted subtotal
+   * reaches it (null = never free).
+   */
+  delivery: {
+    serviceableCountries: ["IN"],
+    methods: [
+      {
+        code: "standard",
+        label: "Standard delivery",
+        description: "Delivered in 3–5 business days",
+        feePaise: 5000,
+        minDays: 3,
+        maxDays: 5,
+        freeAboveSubtotalPaise: null as number | null,
+        pincodePrefixes: null as string[] | null,
+        active: true,
+      },
+      {
+        code: "express",
+        label: "Express delivery",
+        description: "Delivered in 1–2 business days",
+        feePaise: 10000,
+        minDays: 1,
+        maxDays: 2,
+        freeAboveSubtotalPaise: null as number | null,
+        pincodePrefixes: null as string[] | null,
+        active: true,
+      },
+    ],
+  },
 };

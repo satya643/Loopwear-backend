@@ -167,8 +167,23 @@ async function main() {
     create: { baseCurrency: "INR", targetCurrency: "USD", rate: 0.012 },
   });
 
+  // Demo coupon: 10% off, up to ₹500, on orders of ₹999+, once per customer.
+  await prisma.coupon.upsert({
+    where: { code: "WELCOME10" },
+    update: {},
+    create: {
+      code: "WELCOME10",
+      description: "10% off your first order (up to ₹500)",
+      type: "percent",
+      value: 10,
+      maxDiscountPaise: 50000,
+      minSubtotalPaise: 99900,
+      perUserLimit: 1,
+    },
+  });
+
   // eslint-disable-next-line no-console
-  console.log("Seed complete:", { admin: admin.email, customer: customer.email });
+  console.log("Seed complete:", { admin: admin.email, customer: customer.email, coupon: "WELCOME10" });
 }
 
 main()

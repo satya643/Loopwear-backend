@@ -1,6 +1,7 @@
 import { createApp } from "./app";
 import { env } from "./config/env";
 import { prisma } from "./lib/prisma";
+import { startJobScheduler } from "./jobs/scheduler";
 
 async function start() {
   try {
@@ -21,6 +22,8 @@ async function start() {
     // eslint-disable-next-line no-console
     console.log(`LoopWear backend listening on http://localhost:${env.port}`);
   });
+
+  if (env.jobs.inProcess) startJobScheduler();
 }
 
 start();

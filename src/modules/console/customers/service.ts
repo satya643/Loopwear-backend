@@ -1,4 +1,5 @@
 import { prisma } from "../../../lib/prisma";
+import { INACTIVE_ORDER_STATUSES } from "../../availability/service";
 import { ApiError } from "../../../lib/errors";
 import { BUSINESS_RULES } from "../../../config/business";
 import { paginatedResponse, toSkipTake, type Pagination } from "../../../lib/pagination";
@@ -55,7 +56,7 @@ export async function listCustomers(filters: { q?: string }, pagination: Paginat
 
   const userIds = users.map((u) => u.id);
   const rentItems = await prisma.orderItem.findMany({
-    where: { mode: "rent", order: { customerId: { in: userIds }, status: { not: "cancelled" } } },
+    where: { mode: "rent", order: { customerId: { in: userIds }, status: { notIn: INACTIVE_ORDER_STATUSES } } },
     select: { rentReturnDate: true, actualReturnDate: true, order: { select: { customerId: true } } },
   });
 
@@ -75,7 +76,7 @@ export async function getCustomer(userId: string) {
   if (!user) throw ApiError.notFound("Customer not found");
 
   const rentItems = await prisma.orderItem.findMany({
-    where: { mode: "rent", order: { customerId: userId, status: { not: "cancelled" } } },
+    where: { mode: "rent", order: { customerId: userId, status: { notIn: INACTIVE_ORDER_STATUSES } } },
     select: { rentReturnDate: true, actualReturnDate: true },
   });
   return summarize(user, rentItems);

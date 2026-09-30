@@ -54,6 +54,12 @@ export async function signUp(input: { name: string; email: string; phone: string
     throw ApiError.conflict("An account with this phone number already exists");
   }
 
+  // An *unverified* account never proved it owns this phone — don't let it
+  // block the real owner (previously this hit the unique constraint → 500).
+  if (existingByPhone && !existingByPhone.verified && existingByPhone.id !== existingByEmail?.id) {
+    await prisma.user.update({ where: { id: existingByPhone.id }, data: { phone: null } });
+  }
+
   const passwordHash = await hashSecret(input.password);
 
   const user = existingByEmail
@@ -92,13 +98,6 @@ export async function resendOtp(phone: string) {
   await issueOtp(phone);
 }
 
-/**
- * Password must be checked BEFORE the verified check. Checking verified
- * first lets anyone who merely knows an email address (no password needed)
- * distinguish "no such account" (401) from "exists but unverified" (403) —
- * an account-enumeration leak. A 403 is now only possible after the caller
- * has already proven they know the password.
- */
 export async function signIn(email: string, password: string, meta: { ip?: string | null; userAgent?: string | null }) {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user || !user.passwordHash) throw ApiError.unauthorized("Invalid email or password");
@@ -107,11 +106,6 @@ export async function signIn(email: string, password: string, meta: { ip?: strin
   if (!ok) throw ApiError.unauthorized("Invalid email or password");
 
   if (!user.verified) {
-    // Safe to include the phone now — the caller has already proven they
-    // know the password. Without this, the frontend has no way to route an
-    // unverified customer to OTP verification after a failed sign-in (it
-    // only learns the phone at signup time) — they'd just see an error with
-    // no path forward.
     throw ApiError.forbidden("Please verify your account before signing in", { phone: user.phone });
   }
 
@@ -185,11 +179,6 @@ export async function getSessionUser(userId: string) {
   return publicUser(user);
 }
 
-/**
- * Always resolves the same way regardless of whether the email matches an
- * account — callers must never be able to tell from this endpoint's
- * response whether an email exists.
- */
 export async function requestPasswordReset(email: string, meta: { ip?: string | null }) {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return;
@@ -202,13 +191,10 @@ export async function requestPasswordReset(email: string, meta: { ip?: string | 
   if (existing) {
     const secondsSinceLastSend = (Date.now() - existing.createdAt.getTime()) / 1000;
     if (secondsSinceLastSend < env.passwordReset.resendCooldownSeconds) {
-      // Silently no-op rather than surfacing the cooldown — surfacing it
-      // would reveal that a request is already in flight for this email.
       return;
     }
   }
 
-  // Only one active reset link per user at a time.
   await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } });
 
   const token = generateResetToken();

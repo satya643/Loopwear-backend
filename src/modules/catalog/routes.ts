@@ -3,7 +3,7 @@ import { asyncHandler } from "../../lib/asyncHandler";
 import { validateQuery } from "../../middleware/validate";
 import { listProductsQuerySchema, availabilityQuerySchema } from "./schemas";
 import * as catalogService from "./service";
-import { getSizeAvailability } from "../availability/service";
+import { getSizeAvailability, getVariantStock } from "../availability/service";
 import { prisma } from "../../lib/prisma";
 import { ApiError } from "../../lib/errors";
 
@@ -38,15 +38,28 @@ catalogRouter.get(
   "/products/:id/availability",
   validateQuery(availabilityQuerySchema),
   asyncHandler(async (req, res) => {
-    const { size, start, end } = req.query as unknown as { size: string; start: string; end: string };
+    const { size, start, end, variantId } = req.query as unknown as { size: string; start: string; end: string; variantId?: string };
     const product = await prisma.product.findUnique({ where: { id: req.params.id } });
-    if (!product) throw ApiError.notFound("Product not found");
+    if (!product || !product.isActive) throw ApiError.notFound("Product not found");
 
     const startDate = new Date(start);
     const endDate = new Date(end);
+    if (variantId) {
+      const row = (await getVariantStock(product.id, startDate, endDate)).find((r) => r.variantId === variantId && r.size === size);
+      const unitsFree = row?.rentUnitsFree ?? 0;
+      res.json({ size, variantId, available: unitsFree > 0, unitsFree });
+      return;
+    }
     const sizes = await getSizeAvailability(product.id, startDate, endDate);
     const match = sizes.find((s) => s.size === size) ?? { size, available: false, unitsFree: 0 };
     res.json(match);
+  })
+);
+
+catalogRouter.get(
+  "/categories",
+  asyncHandler(async (_req, res) => {
+    res.json({ items: await catalogService.listCategories() });
   })
 );
 

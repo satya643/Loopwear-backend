@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import path from "node:path";
+import { env } from "./config/env";
 
 import { optionalAuth } from "./middleware/auth";
 import { resolveCurrency } from "./middleware/currency";
@@ -16,7 +17,9 @@ import { cartRouter } from "./modules/cart/routes";
 import { wishlistRouter } from "./modules/wishlist/routes";
 import { checkoutRouter } from "./modules/checkout/routes";
 import { ordersRouter } from "./modules/orders/routes";
-import { paymentsRouter, paymentsWebhookRouter } from "./modules/payments/routes";
+import { paymentsRouter, paymentsWebhookRouter, webhooksRouter } from "./modules/payments/routes";
+import { addressesRouter } from "./modules/addresses/routes";
+import { shippingRouter } from "./modules/shipping/routes";
 
 import { inventoryRouter } from "./modules/console/inventory/routes";
 import { laundryRouter } from "./modules/console/laundry/routes";
@@ -32,57 +35,42 @@ import { consoleCouriersRouter } from "./modules/console/couriers/routes";
 import { consoleFacilitiesRouter } from "./modules/console/facilities/routes";
 import { consoleUploadsRouter } from "./modules/console/uploads/routes";
 import { consoleOccasionTilesRouter } from "./modules/console/occasionTiles/routes";
+import { consoleCouponsRouter } from "./modules/console/coupons/routes";
 
 export function createApp() {
   const app = express();
 
-  // Default helmet() sends Cross-Origin-Resource-Policy: same-origin, which
-  // browsers use to BLOCK loading any resource from a different origin —
-  // including this server's own /uploads images requested via <img src="…">
-  // from the admin panel (:3002) or shop (:3000), since those are different
-  // ports = different origins. curl never enforces this (only browsers do),
-  // which is why this silently broke every uploaded image in an actual
-  // browser tab. This is a public API meant to be embedded cross-origin, so
-  // that policy is loosened deliberately here, not disabled everywhere.
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-  app.use(cors());
+  
+  app.set("trust proxy", env.trustProxy);
+  app.use(cors(env.corsOrigins.length > 0 ? { origin: env.corsOrigins } : undefined));
   app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
-  // Stripe webhook needs the raw body for signature verification — must be
-  // mounted before express.json() below. See modules/payments/routes.ts.
+  app.use("/api/webhooks", webhooksRouter);
   app.use("/api/payments", paymentsWebhookRouter);
 
   app.use(express.json());
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
-
-  // Serves whatever lib/imageStorage.ts's local-disk fallback has saved —
-  // only reachable when Cloudinary isn't configured or errors out on a
-  // given upload (see console/uploads/routes.ts). Public/unauthenticated,
-  // same as any Cloudinary URL would be.
   app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-  // Resolves req.auth (if a valid bearer token is present) and req.currency
-  // for every request; individual routers still enforce requireAuth/RBAC.
   app.use(optionalAuth, resolveCurrency);
 
-  // Webhook (mounted above, before express.json()) intentionally bypasses
-  // this — Stripe's own IPs/volume must never be throttled by this limiter.
   app.use("/api", generalRateLimiter);
 
-  // authRateLimiter is applied per-route inside authRouter (only to
-  // credential-attempt endpoints), not to the whole router — see routes.ts.
   app.use("/api/auth", authRouter);
-  // catalogRouter defines its own /products and /occasions paths internally.
+
   app.use("/api", catalogRouter);
   app.use("/api/outfits", outfitsRouter);
   app.use("/api/cart", cartRouter);
   app.use("/api/wishlist", wishlistRouter);
   app.use("/api/checkout", checkoutRouter);
+  app.use("/api/addresses", addressesRouter);
+  app.use("/api/shipping", shippingRouter);
   app.use("/api/orders", ordersRouter);
   app.use("/api/payments", paymentsRouter);
 
-  // inventoryRouter defines its own /garment-units and /lifecycle paths internally.
+
   app.use("/api/console", inventoryRouter);
   app.use("/api/console/laundry", laundryRouter);
   app.use("/api/console/orders", consoleOrdersRouter);
@@ -97,6 +85,7 @@ export function createApp() {
   app.use("/api/console/facilities", consoleFacilitiesRouter);
   app.use("/api/console/uploads", consoleUploadsRouter);
   app.use("/api/console/occasion-tiles", consoleOccasionTilesRouter);
+  app.use("/api/console/coupons", consoleCouponsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

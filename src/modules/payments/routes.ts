@@ -6,16 +6,74 @@ import { requireAuth } from "../../middleware/auth";
 import { validateBody } from "../../middleware/validate";
 import { ApiError } from "../../lib/errors";
 import { constructWebhookEvent } from "./stripe";
-import { verifyWebhookSignature } from "./razorpay";
+import { createPaymentSession } from "./session";
 import * as paymentsService from "./service";
+import { handleRazorpayWebhook } from "../webhooks/razorpay";
 
 export const paymentsRouter = Router();
+paymentsRouter.use(requireAuth);
+
+const orderIdSchema = z.object({ orderId: z.string().trim().min(1).max(64) });
+
+/** Opens (or re-opens, for a retry) the payment widget for an unpaid order. */
+paymentsRouter.post(
+  "/razorpay/order",
+  validateBody(orderIdSchema),
+  asyncHandler(async (req, res) => {
+    res.json(await createPaymentSession(req.body.orderId, req.auth!.userId));
+  })
+);
+
+const razorpayVerifySchema = z.object({
+  razorpay_order_id: z.string().min(1).max(64),
+  razorpay_payment_id: z.string().min(1).max(64),
+  razorpay_signature: z.string().min(1).max(256),
+});
+
+/**
+ * Called from Razorpay Checkout's success handler. 200 once the order is
+ * confirmed; 202 `processing` if Razorpay couldn't be reached to double-check
+ * (the webhook/reconcile job finishes it — the client polls the order).
+ */
+paymentsRouter.post(
+  "/razorpay/verify",
+  validateBody(razorpayVerifySchema),
+  asyncHandler(async (req, res) => {
+    const outcome = await paymentsService.verifyRazorpayCheckout(req.auth!.userId, req.body);
+    const orderId = outcome.status === "processing" ? outcome.orderId : outcome.result.orderId;
+    const orderStatus = outcome.status === "processing" ? "pending_payment" : outcome.result.orderStatus;
+    res.status(outcome.status === "processing" ? 202 : 200).json({
+      status: outcome.status,
+      order: { id: orderId, status: orderStatus },
+      // Kept for clients built against the previous response shape.
+      payment: { id: outcome.payment.id, orderId, status: outcome.status === "processing" ? outcome.payment.status : "paid" },
+    });
+  })
+);
+
+const failureSchema = orderIdSchema.extend({
+  kind: z.enum(["failed", "dismissed"]),
+  razorpayPaymentId: z.string().max(64).optional(),
+  code: z.string().max(100).optional(),
+  description: z.string().max(500).optional(),
+  reason: z.string().max(200).optional(),
+});
+
+/** Widget reported a failed attempt or was closed. Informational — the order stays payable. */
+paymentsRouter.post(
+  "/razorpay/failure",
+  validateBody(failureSchema),
+  asyncHandler(async (req, res) => {
+    const { orderId, ...rest } = req.body as z.infer<typeof failureSchema>;
+    res.json(await paymentsService.recordPaymentFailure(orderId, req.auth!.userId, { ...rest, actor: "customer" }));
+  })
+);
 
 const confirmSchema = z.object({ paymentIntentId: z.string().min(1) });
 
+/** Stripe lane (non-INR). */
 paymentsRouter.post(
   "/confirm",
-  requireAuth,
   validateBody(confirmSchema),
   asyncHandler(async (req, res) => {
     const payment = await paymentsService.confirmPaymentIntent(req.body.paymentIntentId, req.auth!.userId);
@@ -23,89 +81,41 @@ paymentsRouter.post(
   })
 );
 
-const razorpayVerifySchema = z.object({
-  razorpay_order_id: z.string().min(1),
-  razorpay_payment_id: z.string().min(1),
-  razorpay_signature: z.string().min(1),
+// ---------------------------------------------------------------------------
+// Webhooks — need the raw body for signature verification, so these routers
+// are mounted in app.ts BEFORE express.json() (once a body parser has run,
+// later ones no-op, so the ordering is load-bearing).
+// ---------------------------------------------------------------------------
+
+const razorpayWebhook = asyncHandler(async (req, res) => {
+  const outcome = await handleRazorpayWebhook(
+    req.body as Buffer,
+    req.headers["x-razorpay-signature"] as string | undefined,
+    req.headers["x-razorpay-event-id"] as string | undefined
+  );
+  res.json({ received: true, outcome });
 });
 
-/**
- * Called by the frontend's Razorpay Checkout `handler` callback once the
- * customer completes payment in the widget. The signature is what proves
- * this really came from Razorpay rather than a client claiming success.
- */
-paymentsRouter.post(
-  "/razorpay/verify",
-  requireAuth,
-  validateBody(razorpayVerifySchema),
-  asyncHandler(async (req, res) => {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
-    const payment = await paymentsService.confirmRazorpayPayment(
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature
-    );
-    res.json({ payment });
-  })
-);
+const stripeWebhook = asyncHandler(async (req, res) => {
+  const signature = req.headers["stripe-signature"];
+  if (typeof signature !== "string") throw ApiError.badRequest("Missing stripe-signature header");
 
-/**
- * Stripe requires the raw request body to verify the webhook signature, so
- * this route is mounted separately in app.ts, BEFORE the global express.json()
- * parser — once any body-parser has run, later ones no-op (body-parser sets
- * req._body), so ordering here is load-bearing, not cosmetic.
- */
+  const event = constructWebhookEvent(req.body, signature);
+  if (event.type === "payment_intent.succeeded") {
+    const intent = event.data.object as { id: string };
+    await paymentsService.confirmPaymentIntent(intent.id).catch((err) => {
+      if (!(err instanceof ApiError && err.status === 404)) throw err;
+    });
+  }
+  res.json({ received: true });
+});
+
+/** Canonical: POST /api/webhooks/razorpay, POST /api/webhooks/stripe */
+export const webhooksRouter = Router();
+webhooksRouter.post("/razorpay", express.raw({ type: "application/json" }), razorpayWebhook);
+webhooksRouter.post("/stripe", express.raw({ type: "application/json" }), stripeWebhook);
+
+/** Legacy paths, kept so gateway dashboards configured with them keep working. */
 export const paymentsWebhookRouter = Router();
-
-paymentsWebhookRouter.post(
-  "/webhook",
-  express.raw({ type: "application/json" }),
-  asyncHandler(async (req, res) => {
-    const signature = req.headers["stripe-signature"];
-    if (typeof signature !== "string") throw ApiError.badRequest("Missing stripe-signature header");
-
-    const event = constructWebhookEvent(req.body, signature);
-
-    if (event.type === "payment_intent.succeeded") {
-      const intent = event.data.object as { id: string };
-      await paymentsService.confirmPaymentIntent(intent.id).catch(() => {
-        // Already processed or not found locally — webhook retries are expected to be idempotent no-ops.
-      });
-    }
-
-    res.json({ received: true });
-  })
-);
-
-/**
- * Razorpay webhook — optional (only fires if a webhook is configured in the
- * Razorpay dashboard with RAZORPAY_WEBHOOK_SECRET set to match). Also needs
- * the raw body for signature verification, so it's mounted alongside the
- * Stripe webhook, before express.json().
- */
-paymentsWebhookRouter.post(
-  "/razorpay-webhook",
-  express.raw({ type: "application/json" }),
-  asyncHandler(async (req, res) => {
-    const signature = req.headers["x-razorpay-signature"];
-    if (typeof signature !== "string") throw ApiError.badRequest("Missing x-razorpay-signature header");
-    if (!verifyWebhookSignature(req.body, signature)) throw ApiError.badRequest("Invalid webhook signature");
-
-    const event = JSON.parse(req.body.toString("utf8"));
-
-    if (event.event === "payment.captured") {
-      const orderId: string | undefined = event.payload?.payment?.entity?.order_id;
-      const paymentId: string | undefined = event.payload?.payment?.entity?.id;
-      if (orderId && paymentId) {
-        // Webhook delivery is already authenticated by the signature check
-        // above (there's no separate checkout signature to re-verify here,
-        // unlike the /razorpay/verify path), so mark paid directly.
-        await paymentsService.markRazorpayPaymentPaidFromWebhook(orderId, paymentId).catch(() => {
-          // Already processed or not found locally — webhook retries are expected to be idempotent no-ops.
-        });
-      }
-    }
-
-    res.json({ received: true });
-  })
-);
+paymentsWebhookRouter.post("/webhook", express.raw({ type: "application/json" }), stripeWebhook);
+paymentsWebhookRouter.post("/razorpay-webhook", express.raw({ type: "application/json" }), razorpayWebhook);

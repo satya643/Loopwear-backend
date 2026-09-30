@@ -14,6 +14,7 @@ export const listProductsQuerySchema = paginationSchema.extend({
 
 export const availabilityQuerySchema = z.object({
   size: z.string().min(1),
+  variantId: z.string().min(1).optional(),
   start: z.string().refine((v) => !Number.isNaN(Date.parse(v)), "invalid start date"),
   end: z.string().refine((v) => !Number.isNaN(Date.parse(v)), "invalid end date"),
 });

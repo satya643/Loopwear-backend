@@ -2,9 +2,14 @@ import { Router } from "express";
 import { asyncHandler } from "../../lib/asyncHandler";
 import { requireAuth } from "../../middleware/auth";
 import { validateBody, validateQuery } from "../../middleware/validate";
-import { addCartItemSchema, removeCartItemQuerySchema } from "./schemas";
+import {
+  addCartItemSchema,
+  applyCouponSchema,
+  mergeCartSchema,
+  removeCartItemQuerySchema,
+  updateCartItemSchema,
+} from "./schemas";
 import * as cartService from "./service";
-import { z } from "zod";
 
 export const cartRouter = Router();
 cartRouter.use(requireAuth);
@@ -28,32 +33,50 @@ cartRouter.post(
   })
 );
 
+cartRouter.patch(
+  "/items/:itemId",
+  validateBody(updateCartItemSchema),
+  asyncHandler(async (req, res) => {
+    res.json(await cartService.updateCartItem(req.auth!.userId, req.params.itemId, req.body, ctx(req)));
+  })
+);
+
 cartRouter.delete(
-  "/items/:productId",
+  "/items/:itemId",
   validateQuery(removeCartItemQuerySchema),
   asyncHandler(async (req, res) => {
-    const { mode } = req.query as unknown as { mode: "rent" | "buy" };
-    await cartService.removeCartItem(req.auth!.userId, req.params.productId, mode);
+    const { mode } = req.query as { mode?: "rent" | "buy" };
+    await cartService.removeCartItem(req.auth!.userId, req.params.itemId, mode);
     res.status(204).end();
   })
 );
 
-const mergeSchema = z.object({
-  lines: z.array(
-    z.object({
-      productId: z.string().min(1),
-      mode: z.enum(["rent", "buy"]),
-      size: z.string().min(1),
-      startDate: z.string().optional(),
-    })
-  ),
-});
+cartRouter.post(
+  "/coupon",
+  validateBody(applyCouponSchema),
+  asyncHandler(async (req, res) => {
+    res.json(await cartService.applyCoupon(req.auth!.userId, req.body.code, ctx(req)));
+  })
+);
+
+cartRouter.delete(
+  "/coupon",
+  asyncHandler(async (req, res) => {
+    res.json(await cartService.removeCoupon(req.auth!.userId, ctx(req)));
+  })
+);
+
+cartRouter.post(
+  "/revalidate",
+  asyncHandler(async (req, res) => {
+    res.json(await cartService.revalidateCart(req.auth!.userId, ctx(req)));
+  })
+);
 
 cartRouter.post(
   "/merge",
-  validateBody(mergeSchema),
+  validateBody(mergeCartSchema),
   asyncHandler(async (req, res) => {
-    await cartService.mergeCartLines(req.auth!.userId, req.body.lines);
-    res.json(await cartService.getCart(req.auth!.userId, ctx(req)));
+    res.json(await cartService.mergeCartLines(req.auth!.userId, req.body.lines, ctx(req)));
   })
 );

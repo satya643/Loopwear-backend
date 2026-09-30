@@ -2,7 +2,7 @@
   "name": "loopwear-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "LoopWear backend API — Shop, Concourse (console) and Auth services",
+  "description": "LoopWear backend API \u2014 Shop, Concourse (console) and Auth services",
   "main": "dist/server.js",
   "scripts": {
     "predev": "prisma migrate deploy",
@@ -20,7 +20,8 @@
     "jobs:release-stale-orders": "tsx src/jobs/releaseStalePendingOrders.ts",
     "jobs:release-reservations": "tsx src/jobs/releaseAbandonedReservations.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run -c vitest.integration.config.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",

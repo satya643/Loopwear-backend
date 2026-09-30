@@ -41,6 +41,8 @@ const statusSchema = z.object({
     "return_in_transit",
     "closed",
     "cancelled",
+    "payment_failed",
+    "refunded",
   ]),
 });
 

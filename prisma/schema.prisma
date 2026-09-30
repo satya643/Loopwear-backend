@@ -85,12 +85,20 @@ enum OrderStatus {
   return_in_transit @map("return in transit")
   closed
   cancelled
+  // Hold expired after a failed/abandoned payment attempt — stock released.
+  payment_failed    @map("payment failed")
+  // Fully refunded (customer/operator cancel after payment, or a late
+  // payment that arrived after the order's stock was released).
+  refunded
 }
 
 enum PaymentMethod {
   card
   wallet
   bank_transfer
+  upi
+  netbanking
+  other
 }
 
 enum PaymentStatus {
@@ -139,6 +147,39 @@ enum DeliveryStatus {
   delayed
 }
 
+enum DiscountType {
+  percent
+  flat
+}
+
+enum OrderEventType {
+  order_created
+  payment_initiated
+  payment_failed
+  payment_cancelled
+  payment_succeeded
+  status_changed
+  order_cancelled
+  order_expired
+  refund_initiated
+  refunded
+  note
+}
+
+enum OrderActor {
+  customer
+  system
+  operator
+  gateway
+}
+
+enum WebhookEventStatus {
+  received
+  processed
+  ignored
+  failed
+}
+
 enum NotificationSeverity {
   info
   warning
@@ -174,38 +215,40 @@ model User {
   preferredCurrency String?
   createdAt         DateTime @default(now())
 
-  cart                 Cart?
-  wishlistItems        WishlistItem[]
-  orders               Order[]              @relation("CustomerOrders")
-  payments             Payment[]
-  sessions             Session[]
-  stageTransitions     StageTransition[]    @relation("StageTransitionActor")
-  reviews              Review[]
-  notificationReads    NotificationRead[]
-  passwordResetTokens  PasswordResetToken[]
+  cart                Cart?
+  wishlistItems       WishlistItem[]
+  orders              Order[]              @relation("CustomerOrders")
+  payments            Payment[]
+  sessions            Session[]
+  stageTransitions    StageTransition[]    @relation("StageTransitionActor")
+  reviews             Review[]
+  notificationReads   NotificationRead[]
+  passwordResetTokens PasswordResetToken[]
+  addresses           Address[]
+  couponRedemptions   CouponRedemption[]
 }
 
 model Session {
-  id         String    @id @default(uuid())
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  issuedAt   DateTime  @default(now())
-  expiresAt  DateTime
-  revokedAt  DateTime?
-  userAgent  String?
-  ip         String?
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issuedAt  DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
 
   @@index([userId])
 }
 
 model OtpCode {
-  phone            String    @id
-  codeHash         String
-  expiresAt        DateTime
-  attempts         Int       @default(0)
-  lastSentAt       DateTime  @default(now())
-  sendCount        Int       @default(0)
-  sendWindowStart  DateTime  @default(now())
+  phone           String   @id
+  codeHash        String
+  expiresAt       DateTime
+  attempts        Int      @default(0)
+  lastSentAt      DateTime @default(now())
+  sendCount       Int      @default(0)
+  sendWindowStart DateTime @default(now())
 }
 
 // One-time password-reset link, delivered by email. tokenHash is a SHA-256
@@ -213,14 +256,14 @@ model OtpCode {
 // deterministic, so we can look the record up directly by hash without
 // needing a separate identifier alongside the token.
 model PasswordResetToken {
-  id         String    @id @default(uuid())
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash  String    @unique
-  expiresAt  DateTime
-  usedAt     DateTime?
-  requestIp  String?
-  createdAt  DateTime  @default(now())
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  requestIp String?
+  createdAt DateTime  @default(now())
 
   @@index([userId])
 }
@@ -234,56 +277,56 @@ model PasswordResetToken {
 // the shop's category navigation both read this same table (never two
 // separate lists to keep in sync). Managed via the console, not hardcoded.
 model Category {
-  id        String    @id @default(uuid())
-  name      String    @unique
-  slug      String    @unique
-  isActive  Boolean   @default(true)
-  sortOrder Int       @default(0)
-  createdAt DateTime  @default(now())
+  id        String   @id @default(uuid())
+  name      String   @unique
+  slug      String   @unique
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
 
-  products  Product[]
+  products Product[]
 }
 
 model Product {
-  id              String        @id @default(uuid())
-  name            String
-  brand           String
-  categoryId      String
-  category        Category      @relation(fields: [categoryId], references: [id])
-  occasions       Occasion[]
-  styles          StyleTag[]
-  rentPricePaise  Int
-  rentDays        Int
-  buyPricePaise   Int
-  depositPaise    Int
-  deliveryDays    Int
-  fabric          String
-  care            String[]
-  measurements    Json
+  id             String     @id @default(uuid())
+  name           String
+  brand          String
+  categoryId     String
+  category       Category   @relation(fields: [categoryId], references: [id])
+  occasions      Occasion[]
+  styles         StyleTag[]
+  rentPricePaise Int
+  rentDays       Int
+  buyPricePaise  Int
+  depositPaise   Int
+  deliveryDays   Int
+  fabric         String
+  care           String[]
+  measurements   Json
   // Free-text product write-up (the shop's "details" copy) — separate from
   // `fabric`/`care`/`measurements`, which are each their own structured
   // field. Empty string, not null, so every consumer can render it directly.
-  description     String        @default("")
+  description    String     @default("")
   // One admin-uploaded thumbnail shown on cards/cart lines before any color
   // is picked (or when a color has no photo of its own yet) — see
   // ProductVariant.imageUrls for the per-color photos that take priority
   // over this once a customer selects a color.
-  coverImageUrl   String?
+  coverImageUrl  String?
   // Per-product condition/quality blurb shown on the PDP — was a single
   // hardcoded string for every product ("Excellent condition, inspected
   // before dispatch"); now admin-settable, defaulting to that same copy so
   // existing products render unchanged until an admin customizes it.
-  conditionCopy   String        @default("Excellent condition, inspected before dispatch")
-  isActive        Boolean       @default(true)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  conditionCopy  String     @default("Excellent condition, inspected before dispatch")
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
-  variants        ProductVariant[]
-  reviews         Review[]
-  outfitProducts  OutfitProduct[]
-  cartItems       CartItem[]
-  wishlistItems   WishlistItem[]
-  orderItems      OrderItem[]
+  variants       ProductVariant[]
+  reviews        Review[]
+  outfitProducts OutfitProduct[]
+  cartItems      CartItem[]
+  wishlistItems  WishlistItem[]
+  orderItems     OrderItem[]
 
   @@index([categoryId])
 }
@@ -294,19 +337,21 @@ model Product {
 // here from Product — a product with 3 colors is one Product row with 3
 // ProductVariant rows, never 3 separate Products.
 model ProductVariant {
-  id         String        @id @default(uuid())
-  productId  String
-  product    Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
-  color      String
-  colorHex   String
-  views      ProductView[]
-  imageUrls  Json          @default("{}")
-  isActive   Boolean       @default(true)
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  id        String        @id @default(uuid())
+  productId String
+  product   Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  color     String
+  colorHex  String
+  views     ProductView[]
+  imageUrls Json          @default("{}")
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
   sizes        VariantSize[]
   garmentUnits GarmentUnit[]
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
 
   @@unique([productId, color])
 }
@@ -338,28 +383,28 @@ model Review {
 }
 
 model Facility {
-  id            String        @id @default(uuid())
-  name          String
-  city          String
-  garmentUnits  GarmentUnit[]
+  id             String         @id @default(uuid())
+  name           String
+  city           String
+  garmentUnits   GarmentUnit[]
   laundryBatches LaundryBatch[]
 }
 
 model GarmentUnit {
-  id              String        @id @default(uuid())
-  sku             String        @unique
-  variantId       String
-  variant         ProductVariant @relation(fields: [variantId], references: [id])
-  size            String
-  stage           GarmentStage  @default(available)
-  condition       Condition     @default(excellent)
-  retiredAt       DateTime?
-  lastMovedAt     DateTime      @default(now())
-  timesRented     Int           @default(0)
-  currentOrderId  String?
-  currentOrder    Order?        @relation("OrderCurrentUnits", fields: [currentOrderId], references: [id])
-  facilityId      String?
-  facility        Facility?     @relation(fields: [facilityId], references: [id])
+  id             String         @id @default(uuid())
+  sku            String         @unique
+  variantId      String
+  variant        ProductVariant @relation(fields: [variantId], references: [id])
+  size           String
+  stage          GarmentStage   @default(available)
+  condition      Condition      @default(excellent)
+  retiredAt      DateTime?
+  lastMovedAt    DateTime       @default(now())
+  timesRented    Int            @default(0)
+  currentOrderId String?
+  currentOrder   Order?         @relation("OrderCurrentUnits", fields: [currentOrderId], references: [id])
+  facilityId     String?
+  facility       Facility?      @relation(fields: [facilityId], references: [id])
 
   stageTransitions StageTransition[]
   batchItems       BatchItem[]
@@ -370,26 +415,26 @@ model GarmentUnit {
 }
 
 model StageTransition {
-  id              String        @id @default(uuid())
-  garmentUnitId   String
-  garmentUnit     GarmentUnit   @relation(fields: [garmentUnitId], references: [id], onDelete: Cascade)
-  fromStage       GarmentStage?
-  toStage         GarmentStage
-  actorUserId     String?
-  actor           User?         @relation("StageTransitionActor", fields: [actorUserId], references: [id])
-  occurredAt      DateTime      @default(now())
-  note            String?
+  id            String        @id @default(uuid())
+  garmentUnitId String
+  garmentUnit   GarmentUnit   @relation(fields: [garmentUnitId], references: [id], onDelete: Cascade)
+  fromStage     GarmentStage?
+  toStage       GarmentStage
+  actorUserId   String?
+  actor         User?         @relation("StageTransitionActor", fields: [actorUserId], references: [id])
+  occurredAt    DateTime      @default(now())
+  note          String?
 
   @@index([garmentUnitId])
 }
 
 model Outfit {
-  id                  String   @id @default(uuid())
-  name                String
-  occasion            Occasion
-  lookRentPricePaise  Int
-  lookBuyPricePaise   Int
-  lookRentDays        Int
+  id                 String   @id @default(uuid())
+  name               String
+  occasion           Occasion
+  lookRentPricePaise Int
+  lookBuyPricePaise  Int
+  lookRentDays       Int
 
   outfitProducts OutfitProduct[]
 }
@@ -423,27 +468,38 @@ model OccasionTile {
 // ---------------------------------------------------------------------------
 
 model Cart {
-  id        String     @id @default(uuid())
-  userId    String     @unique
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime   @default(now())
-  items     CartItem[]
+  id         String     @id @default(uuid())
+  userId     String     @unique
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Code the customer applied — re-evaluated on every cart read, never a
+  // stored discount amount (see modules/coupons).
+  couponCode String?
+  createdAt  DateTime   @default(now())
+  items      CartItem[]
 }
 
 model CartItem {
-  id        String    @id @default(uuid())
-  cartId    String
-  cart      Cart      @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  productId String
-  product   Product   @relation(fields: [productId], references: [id])
-  mode      CartMode
-  size      String
-  startDate DateTime?
-  addedAt   DateTime  @default(now())
+  id                     String         @id @default(uuid())
+  cartId                 String
+  cart                   Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId              String
+  product                Product        @relation(fields: [productId], references: [id])
+  // The colour chosen. Stock is per (variant, size), never per product.
+  variantId              String
+  variant                ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  mode                   CartMode
+  size                   String
+  quantity               Int            @default(1)
+  startDate              DateTime?
+  // Price the customer saw when the line was added/last revalidated — only
+  // used to tell them "price changed", never to charge (the DB price is).
+  unitPricePaiseSnapshot Int?
+  depositPaiseSnapshot   Int?
+  addedAt                DateTime       @default(now())
+  updatedAt              DateTime       @default(now()) @updatedAt
 
-  // Matches the frontend's addLine behavior: adding the same (product, mode)
-  // replaces the existing line rather than duplicating it.
-  @@unique([cartId, productId, mode])
+  // Adding the same (colour, size, mode) again updates that line.
+  @@unique([cartId, variantId, size, mode])
 }
 
 model WishlistItem {
@@ -461,13 +517,13 @@ model WishlistItem {
 // ---------------------------------------------------------------------------
 
 model Order {
-  id                  String        @id
-  customerId          String
-  customer            User          @relation("CustomerOrders", fields: [customerId], references: [id])
-  placedAt            DateTime      @default(now())
-  eventDate           DateTime?
-  status              OrderStatus   @default(pending_payment)
-  city                String?
+  id                   String      @id
+  customerId           String
+  customer             User        @relation("CustomerOrders", fields: [customerId], references: [id])
+  placedAt             DateTime    @default(now())
+  eventDate            DateTime?
+  status               OrderStatus @default(pending_payment)
+  city                 String?
   // Shipping/delivery address — the checkout request body already carried
   // this (frontend's `DeliveryDetails`) but nothing on the backend accepted
   // or stored it, so every order was placed with no address to ship to at all.
@@ -482,33 +538,75 @@ model Order {
   deliveryNote         String?
   // Currency the customer was actually charged in, plus the FX rate applied
   // at order time (audit trail) — canonical accounting stays in base currency.
-  currency            String        @default("INR")
-  fxRateToBase        Float         @default(1.0)
-  totalPaise          Int
-  depositTotalPaise   Int
-  createdVia          String        @default("shop")
-  idempotencyKey      String?       @unique
-  createdAt           DateTime      @default(now())
+  currency             String      @default("INR")
+  fxRateToBase         Float       @default(1.0)
+  // Price breakdown, all base-currency paise, all computed server-side:
+  //   totalPaise = subtotalPaise - discountPaise + deliveryFeePaise
+  //   amount charged = totalPaise + depositTotalPaise
+  subtotalPaise        Int         @default(0)
+  discountPaise        Int         @default(0)
+  deliveryFeePaise     Int         @default(0)
+  totalPaise           Int
+  depositTotalPaise    Int
+  couponId             String?
+  coupon               Coupon?     @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  couponCode           String?
+  // The saved address used; the delivery* columns above are the snapshot
+  // that actually drives fulfilment (the address can be edited/deleted later).
+  addressId            String?
+  address              Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  deliveryMethod       String?
+  deliveryMethodLabel  String?
+  deliveryEtaMinDays   Int?
+  deliveryEtaMaxDays   Int?
+  // Unpaid orders hold stock until this moment (see jobs/releaseAbandonedReservations).
+  paymentExpiresAt     DateTime?
+  // Hash of items + address + method + coupon + total — lets a repeated
+  // "place order" for the same checkout return the same unpaid order.
+  checkoutFingerprint  String?
+  // Cart lines this order was built from; removed from the cart only once
+  // payment is confirmed.
+  sourceCartItemIds    String[]    @default([])
+  confirmedAt          DateTime?
+  cancelledAt          DateTime?
+  cancelReason         String?
+  createdVia           String      @default("shop")
+  idempotencyKey       String?     @unique
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @default(now()) @updatedAt
 
-  items        OrderItem[]
-  payments     Payment[]
-  deliveryJobs DeliveryJob[]
-  garmentUnits GarmentUnit[] @relation("OrderCurrentUnits")
+  items            OrderItem[]
+  payments         Payment[]
+  deliveryJobs     DeliveryJob[]
+  garmentUnits     GarmentUnit[]     @relation("OrderCurrentUnits")
+  events           OrderEvent[]
+  refunds          Refund[]
+  couponRedemption CouponRedemption?
 
   @@index([customerId])
   @@index([status])
+  @@index([customerId, status])
+  @@index([status, paymentExpiresAt])
 }
 
 model OrderItem {
-  id               String       @id @default(uuid())
+  id               String          @id @default(uuid())
   orderId          String
-  order            Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order            Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productId        String
-  product          Product      @relation(fields: [productId], references: [id])
+  product          Product         @relation(fields: [productId], references: [id])
+  variantId        String?
+  variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  // Snapshots at purchase time — the order must read the same even if the
+  // product is renamed, recoloured or deleted later.
+  productName      String?
+  color            String?
+  imageUrl         String?
   garmentUnitId    String?
-  garmentUnit      GarmentUnit? @relation(fields: [garmentUnitId], references: [id])
+  garmentUnit      GarmentUnit?    @relation(fields: [garmentUnitId], references: [id])
   mode             CartMode
   size             String
+  // One row per physical unit, so quantity is implicit (the API groups rows).
   unitPricePaise   Int
   depositPaise     Int
   rentDays         Int?
@@ -545,7 +643,13 @@ model Payment {
   // refundable id (the PaymentIntent).
   gatewayPaymentRef  String?
   idempotencyKey     String?        @unique
+  // Last failed attempt on this gateway order (Razorpay lets the customer
+  // retry the same order, so a failure doesn't end the payment).
+  failureCode        String?
+  failureReason      String?
+  paidAt             DateTime?
   createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @default(now()) @updatedAt
 
   refunds Refund[]
 
@@ -553,19 +657,128 @@ model Payment {
   @@index([customerId])
 }
 
+// Either a per-item refund (rental deposit, orderItemId set) or a whole-order
+// refund (cancellation / late payment, orderId set).
 model Refund {
-  id           String       @id @default(uuid())
-  orderItemId  String
-  orderItem    OrderItem    @relation(fields: [orderItemId], references: [id])
-  paymentId    String?
-  payment      Payment?     @relation(fields: [paymentId], references: [id])
-  amountPaise  Int
-  reason       String
-  status       RefundStatus @default(pending)
-  gatewayRef   String?
-  actorUserId  String?
-  createdAt    DateTime     @default(now())
-  processedAt  DateTime?
+  id          String       @id @default(uuid())
+  orderItemId String?
+  orderItem   OrderItem?   @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  orderId     String?
+  order       Order?       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentId   String?
+  payment     Payment?     @relation(fields: [paymentId], references: [id])
+  amountPaise Int
+  reason      String
+  status      RefundStatus @default(pending)
+  gatewayRef  String?
+  actorUserId String?
+  createdAt   DateTime     @default(now())
+  processedAt DateTime?
+}
+
+// ---------------------------------------------------------------------------
+// Addresses, coupons, order history, webhook log
+// ---------------------------------------------------------------------------
+
+// Customer address book. One default per user is enforced by a partial
+// unique index (hand-written in the migration — not expressible here).
+model Address {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String   @default("Home")
+  fullName   String
+  phone      String
+  line1      String
+  line2      String?
+  landmark   String?
+  city       String
+  state      String
+  postalCode String
+  country    String   @default("IN")
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  orders Order[]
+
+  @@index([userId])
+}
+
+model Coupon {
+  id               String       @id @default(uuid())
+  // Always stored upper-case; lookups normalise the input the same way.
+  code             String       @unique
+  description      String       @default("")
+  type             DiscountType
+  // percent: 1-100; flat: paise.
+  value            Int
+  maxDiscountPaise Int?
+  minSubtotalPaise Int          @default(0)
+  // null = applies to every line; otherwise only rent or only buy lines.
+  appliesTo        CartMode?
+  startsAt         DateTime?
+  endsAt           DateTime?
+  usageLimit       Int?
+  perUserLimit     Int?
+  isActive         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  redemptions CouponRedemption[]
+  orders      Order[]
+}
+
+// Written only when an order's payment is confirmed — this is what usage
+// limits count, so abandoned checkouts never burn a customer's coupon.
+model CouponRedemption {
+  id            String   @id @default(uuid())
+  couponId      String
+  coupon        Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId       String   @unique
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  discountPaise Int
+  createdAt     DateTime @default(now())
+
+  @@index([couponId])
+  @@index([userId, couponId])
+}
+
+// Append-only order history — the customer's tracking timeline and the
+// console's audit trail are both read from here.
+model OrderEvent {
+  id          String         @id @default(uuid())
+  orderId     String
+  order       Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type        OrderEventType
+  // Order status after this event, when the event changed it.
+  status      OrderStatus?
+  message     String
+  actor       OrderActor
+  actorUserId String?
+  metadata    Json?
+  createdAt   DateTime       @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+// Every gateway webhook delivery, keyed by the provider's event id, so a
+// redelivered event is recognised and never processed twice.
+model WebhookEvent {
+  id          String             @id @default(uuid())
+  provider    String
+  eventId     String
+  eventType   String
+  payload     Json
+  status      WebhookEventStatus @default(received)
+  attempts    Int                @default(1)
+  error       String?
+  receivedAt  DateTime           @default(now())
+  processedAt DateTime?
+
+  @@unique([provider, eventId])
 }
 
 // ---------------------------------------------------------------------------
